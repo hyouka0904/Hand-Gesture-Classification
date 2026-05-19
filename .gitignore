@@ -1,0 +1,80 @@
+# ── Python ──────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+*.egg
+*.whl
+
+# ── Virtual Environments ─────────────────────────────────
+.venv/
+venv/
+env/
+ENV/
+conda-env/
+.conda/
+
+# ── Jupyter ──────────────────────────────────────────────
+.ipynb_checkpoints/
+*.ipynb
+
+# ── Dataset (HaGRIDv2 is large; keep only data/ structure)
+data/
+datasets/
+*.tar
+*.tar.gz
+*.zip
+*.7z
+
+# ── Model Weights & Checkpoints ──────────────────────────
+# Keep model/ directory tracked, but ignore large raw checkpoints.
+# Only the final exported weight (≤10 MB) should be committed.
+checkpoints/
+runs/
+wandb/
+lightning_logs/
+*.pth
+*.pt
+*.ckpt
+*.pkl
+*.bin
+# Exception: allow the final submission weight
+!model/*.pth
+!model/*.pt
+!model/*.onnx
+
+# ── Logs & Profiling ─────────────────────────────────────
+logs/
+*.log
+*.csv.log
+tensorboard/
+*.tfevents.*
+
+# ── OS / Editor ──────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# ── Miscellaneous ────────────────────────────────────────
+*.tmp
+*.bak
+tmp/
+temp/
+output/
+results/
+submission*.zip
+team_*.zip
+
+# Others
+sample_preprocessed_outputs/
+*.pdf
+

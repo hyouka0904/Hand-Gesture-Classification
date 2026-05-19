@@ -1,0 +1,17 @@
+# ============================================================
+#  requirements.txt  —  Inference-only dependencies
+#  Evaluated on Google Colab (Python 3.10).
+#  Install:  pip install -r requirements.txt
+# ============================================================
+
+# Core numerical / image
+numpy>=1.24,<2.0
+opencv-python-headless>=4.8,<5.0      # headless: no GUI dep, lighter on Colab
+Pillow>=10.0,<11.0
+
+# Hand landmark preprocessing (TA-provided pipeline)
+mediapipe>=0.10.14,<0.11.0
+
+# Deep learning runtime (CPU is sufficient for inference on Colab)
+torch>=2.2,<2.13
+torchvision>=0.17,<0.22
