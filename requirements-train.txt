@@ -1,11 +1,8 @@
-# ============================================================
-#  requirements-train.txt  —  Full training dependencies
-#  Python 3.10  |  conda env: gesture-cls
-#  Install AFTER creating the conda env (see README).
-# ============================================================
-
 # Inherit all inference deps
 -r requirements.txt
+
+# Local preprocessing (hand_preprocess.py) for demo / data-prep
+mediapipe>=0.10.14,<0.11.0
 
 # Training utilities
 tqdm>=4.66
@@ -13,12 +10,9 @@ scikit-learn>=1.4
 matplotlib>=3.8
 seaborn>=0.13
 
-# Experiment tracking (optional but recommended)
-# tensorboard>=2.16
-
 # Augmentation
 albumentations>=1.4,<2.0
 
-# ONNX export (optional, for model size inspection)
+# ONNX export
 onnx>=1.16
 onnxruntime>=1.18
