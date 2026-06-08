@@ -16,7 +16,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 from tqdm import tqdm
-
+from src.predictor import crop_to_input
 # hand_preprocess.py is at project root, not in src/
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from hand_preprocess import MediaPipeHandPreprocessor
@@ -109,8 +109,10 @@ class HaGRIDv2Dataset(Dataset):
         cache_root: str | Path,
         split: str = "train",
         transform: Optional[Callable] = None,
+        crop_size: int = 112,
     ) -> None:
         self.transform = transform
+        self.crop_size = crop_size
         cache_root = Path(cache_root)
         split_cache = cache_root / split
 
@@ -131,16 +133,19 @@ class HaGRIDv2Dataset(Dataset):
 
     def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor, int]:
         data = np.load(self.samples[idx])
-        crop: np.ndarray = data["crop"]        # (H, W, 3) uint8 RGB
-        landmarks: np.ndarray = data["landmarks"]  # (21, 2) float32
+        crop: np.ndarray = data["crop"]            # (H,W,3) uint8 RGB, variable size
+        landmarks: np.ndarray = data["landmarks"]  # (21,2) float32, crop-relative [0,1]
         label: int = int(data["label"])
 
+        # Augmentation (training only). Contract: (crop_u8, lm) -> (crop_u8, lm).
+        # Geometric augs MUST move landmarks too. Runs BEFORE letterbox/normalize.
         if self.transform is not None:
-            augmented = self.transform(image=crop)
-            crop = augmented["image"]
+            crop, landmarks = self.transform(crop, landmarks)
 
-        # crop: (H, W, 3) uint8 → (3, H, W) float32 [0, 1]
-        crop_tensor = torch.from_numpy(crop).permute(2, 0, 1).float() / 255.0
-        landmarks_tensor = torch.from_numpy(landmarks)  # (21, 2) float32
-
+        # SAME preprocessing as inference (predictor.crop_to_input) — no train/serving skew.
+        crop_in = crop_to_input(crop, self.crop_size)[0]   # (3, S, S) float32, ImageNet-normalized
+        crop_tensor = torch.from_numpy(crop_in)
+        landmarks_tensor = torch.from_numpy(
+            np.ascontiguousarray(landmarks, dtype=np.float32)
+        )                                                   # (21, 2)
         return crop_tensor, landmarks_tensor, label
