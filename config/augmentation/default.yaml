@@ -1,0 +1,139 @@
+# default.yaml
+#
+# Hand Gesture Classification 專用 Data Augmentation 設定。
+#
+# 調整原則：
+# - 想提升對 bbox jitter / 裁切不準的耐受度：調 geometric。
+# - 想提升對低光、模糊、鏡頭雜訊的耐受度：調 photometric。
+# - 想降低 false trigger：調 na_augmentation 與 safety。
+# - 如果 target accuracy 下降，通常代表 augmentation 太強，請先降低 rotate/blur/crop。
+
+# 最後輸出的 image size。
+# MobileNetV3-Small 常用 112 或 224。
+# 112：模型更小、更快。
+# 224：細節更多，但計算量較高。
+image_size: 112
+
+geometric:
+  # 是否啟用幾何增強。
+  enabled: true
+
+  # 整個 geometric augmentation 發生的機率。
+  # 調高：模型更能適應 crop 不準，但可能讓訓練更難。
+  # 調低：訓練較穩，但 robustness 較弱。
+  p: 0.80
+
+  # 平移幅度，0.10 代表最多往 x/y 方向平移圖片寬高的 10%。
+  # 對應 TA 可能做的 bbox jitter。
+  shift_limit: 0.10
+
+  # 縮放範圍。
+  # 0.85~1.15 表示隨機縮小到 85% 或放大到 115%。
+  # 太小可能讓手太小，太大可能裁掉手指。
+  scale_limit: [0.85, 1.15]
+
+  # 旋轉角度，單位是 degree。
+  # target gesture 建議不要太大，因為 spec 說 target 只看 standard pose。
+  rotate_limit: 12
+
+photometric:
+  color_jitter:
+    enabled: true
+
+    # 亮度變化，模擬低光或過曝。
+    # 調高可增強光照 robustness，但太高可能讓手部紋理消失。
+    brightness: 0.25
+
+    # 對比變化，模擬陰影或強光。
+    contrast: 0.25
+
+    # 飽和度變化，模擬不同膚色、相機白平衡。
+    saturation: 0.20
+
+    # 色相變化，不建議超過 0.05~0.08，否則顏色會不自然。
+    hue: 0.05
+
+    # color jitter 發生機率。
+    p: 0.60
+
+  gaussian_blur:
+    enabled: true
+
+    # Gaussian blur kernel size。
+    # [3, 5] 是輕度模糊；[5, 9] 會更模糊。
+    kernel_size: [3, 5]
+
+    # sigma 越大越模糊。
+    sigma: [0.1, 1.5]
+
+    # blur 發生機率。
+    p: 0.25
+
+  motion_blur:
+    enabled: true
+
+    # motion blur 模擬手晃或鏡頭晃。
+    # 太高會傷害 target accuracy，建議先保守。
+    blur_limit: [3, 7]
+    p: 0.10
+
+  noise:
+    enabled: true
+
+    # 高斯雜訊強度。
+    # var_limit 越大，畫面雜訊越明顯。
+    var_limit: [5.0, 30.0]
+    p: 0.15
+
+  jpeg:
+    enabled: true
+
+    # JPEG 品質壓縮。
+    # lower 越低，壓縮痕跡越明顯。
+    quality_lower: 45
+    quality_upper: 95
+    p: 0.15
+
+na_augmentation:
+  # N/A 專用增強。
+  # 目標是降低 false trigger，讓模型對模糊、裁切、不標準姿勢更保守。
+  enabled: true
+
+  # N/A 幾何變換會比 target 稍微強。
+  # multiplier 越高，N/A 的旋轉/平移越激進。
+  na_rotate_multiplier: 1.5
+  na_shift_multiplier: 1.2
+
+  # 嚴重裁切發生機率。
+  # 調高：模型更常看到不完整手勢，較保守。
+  # 太高：可能讓訓練分布不自然。
+  severe_crop_p: 0.15
+
+  # 最多裁掉圖片寬/高的比例。
+  # 0.12 表示最多裁掉約 12%。
+  severe_crop_ratio: 0.12
+
+  # N/A 專用強模糊。
+  severe_blur_limit: [5, 9]
+  severe_blur_sigma: [1.0, 3.0]
+  severe_blur_p: 0.10
+
+  # N/A 專用亮度/對比變化。
+  brightness_limit: 0.35
+  contrast_limit: 0.35
+  brightness_contrast_p: 0.20
+
+safety:
+  # 如果 target class 經 augmentation 後 landmarks 嚴重出界，是否轉成 N/A。
+  # 建議 true，因為 spec 說 distorted / non-standard pose 要當 N/A。
+  convert_bad_target_to_na: true
+
+  # 判斷出界時允許的邊界誤差。
+  # 0.02 表示允許座標稍微超出 [-0.02, 1.02]。
+  oob_margin: 0.02
+
+  # target landmarks 出界比例超過此值，就轉成 N/A。
+  # 0.35 表示 21 個點中約 7 個以上嚴重出界才轉 N/A。
+  # 想更保守可調低，例如 0.25。
+  # 想保留更多 target 可調高，例如 0.45。
+  target_to_na_oob_ratio: 0.35
