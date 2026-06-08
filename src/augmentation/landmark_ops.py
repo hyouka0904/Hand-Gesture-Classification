@@ -6,7 +6,10 @@ landmark_ops.py
     shape = (21, 2)
     座標為 [0, 1]，且是相對 cropped hand image 的座標
 
-README 已說明沒有 z 座標，所以這裡所有函式都只處理x, y。
+注意：
+- README / predictor 的介面都只使用 x, y，沒有 z。
+- augmentation 做幾何變換時，會先把 normalized 座標轉成 pixel 座標，
+  做完變換後再轉回 [0, 1]。
 """
 
 from __future__ import annotations
@@ -15,7 +18,6 @@ from typing import Tuple
 
 import numpy as np
 
-
 _EPS = 1e-6
 
 
@@ -23,9 +25,12 @@ def validate_landmarks(landmarks: np.ndarray) -> np.ndarray:
     """
     檢查並轉換 landmarks 格式。
 
+    Returns:
+        np.ndarray, shape = (21, 2), dtype = float32
+
     可調整方向：
-    - 如果之後資料來源不是 (21, 2)，可以在這裡擴充轉換邏輯。
-    - 目前設計是嚴格檢查，避免訓練時吃到錯誤 annotation。
+    - 目前嚴格要求 (21, 2)，這符合本專案 hand_preprocess / predictor 的契約。
+    - 如果之後 annotation 來源變成攤平的 42 維，可以在這裡加 reshape 邏輯。
     """
     landmarks = np.asarray(landmarks, dtype=np.float32)
 
@@ -44,8 +49,8 @@ def landmarks_to_pixels(landmarks: np.ndarray, width: int, height: int) -> np.nd
 
     Args:
         landmarks: shape (21, 2)，x/y in [0, 1]
-        width: image width
-        height: image height
+        width: crop width
+        height: crop height
 
     Returns:
         shape (21, 2)，x/y 為 pixel 座標
@@ -59,11 +64,11 @@ def landmarks_to_pixels(landmarks: np.ndarray, width: int, height: int) -> np.nd
 
 def pixels_to_landmarks(points: np.ndarray, width: int, height: int) -> np.ndarray:
     """
-    將 pixel 座標轉回 normalized landmarks [0, 1]。
+    將 pixel 座標轉回 normalized landmarks。
 
     注意：
-    - 這裡不會自動 clip 到 [0, 1]，因為我們有時候需要知道 landmark 是否出界。
-    - 是否裁切到 [0, 1] 由外層 transform 控制。
+    - 這裡不會自動 clip 到 [0, 1]。
+    - 是否 clip 由 transform 最後統一處理，避免太早丟失出界資訊。
     """
     points = np.asarray(points, dtype=np.float32)
     if points.shape != (21, 2):
@@ -79,9 +84,9 @@ def clip_landmarks(landmarks: np.ndarray) -> np.ndarray:
     """
     將 landmarks 限制在 [0, 1]。
 
-    可調整方向：
-    - 如果你希望保留出界資訊給 N/A rule，就不要太早呼叫這個函式。
-    - 如果只是要餵給 neural network，通常 clip 後比較安全。
+    用途：
+    - augmentation 最後輸出給 dataset.py 前使用。
+    - dataset.py 之後會直接把 landmarks 餵給模型，所以保持合法範圍較安全。
     """
     landmarks = validate_landmarks(landmarks)
     return np.clip(landmarks, 0.0, 1.0).astype(np.float32)
@@ -97,8 +102,8 @@ def out_of_bounds_ratio(landmarks: np.ndarray, margin: float = 0.0) -> float:
             margin = 0.00：只要小於 0 或大於 1 就算出界。
             margin = 0.05：允許座標落在 [-0.05, 1.05]，較寬鬆。
 
-    用途：
-    - 嚴重出界通常代表 bbox 裁切不完整或手勢不可靠，可作為 N/A 依據。
+    目前 augmentation 主流程不會改 label，因此這個函式主要留給未來
+    predictor 的 N/A rule 或 dataset 的 hard-negative logic 使用。
     """
     landmarks = validate_landmarks(landmarks)
     x = landmarks[:, 0]
@@ -111,17 +116,13 @@ def wrist_relative_normalize(landmarks: np.ndarray) -> np.ndarray:
     """
     將 landmarks 轉成以 wrist，也就是第 0 點為原點的表示。
 
-    做法：
-    1. 所有點減掉 wrist 座標。
-    2. 再除以整隻手的 span，讓尺度更穩定。
-
     用途：
-    - 給 landmark branch 的 MLP 使用。
-    - 增加 translation / scale invariance。
+    - 給 model 的 landmark branch 使用。
+    - 讓 landmark 特徵比較不受手在 crop 中位置與大小影響。
 
     可調整方向：
     - 目前 scale 使用 max(x_span, y_span)。
-    - 若想更精細，可改成 palm size 或 wrist 到 middle fingertip 的距離。
+    - 若之後想更精細，可以改成 wrist 到 middle fingertip 的距離。
     """
     landmarks = validate_landmarks(landmarks)
     centered = landmarks - landmarks[0:1]

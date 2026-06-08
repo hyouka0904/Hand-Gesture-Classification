@@ -1,13 +1,16 @@
 """
 build.py
 
-從 YAML config 建立 augmentation pipeline。
+從 YAML config 或 dict 建立 augmentation transform。
 
-使用方式：
+目前對齊 dataset.py 的 transform 契約：
+    transform(crop, landmarks) -> (crop, landmarks)
+
+建議使用方式：
     from src.augmentation import build_augmentation
 
-    transform = build_augmentation("config/augmentation/default.yaml", train=True)
-    image, landmarks, label = transform(image, landmarks, label)
+    train_transform = build_augmentation("config/augmentation/default.yaml", train=True)
+    val_transform = None  # val/test 請不要使用 augmentation
 """
 
 from __future__ import annotations
@@ -31,33 +34,58 @@ def load_yaml(path: str | Path) -> Dict[str, Any]:
     return data
 
 
-def build_augmentation(cfg_path: str | Path, train: bool = True, override: Optional[Dict[str, Any]] = None):
+def build_transform(aug_cfg: Dict[str, Any]) -> GestureAugmentation:
     """
-    建立 GestureAugmentation。
+    工廠函式：由 dict 建立 transform。
+
+    這是 augmentation 分工的標準接縫：
+        build_transform(aug_cfg: dict) -> transform
+
+    回傳的 transform 介面固定為：
+        crop_aug, landmarks_aug = transform(crop, landmarks)
+
+    Args:
+        aug_cfg:
+            通常來自 config/augmentation/default.yaml。
+            可調整 geometric / photometric 區塊控制增強強度。
+    """
+    cfg = AugmentationConfig(
+        image_size=int(aug_cfg.get("image_size", 112)),  # 保留相容；目前不做 letterbox
+        geometric=aug_cfg.get("geometric", {}),
+        photometric=aug_cfg.get("photometric", {}),
+    )
+    return GestureAugmentation(cfg)
+
+
+def build_augmentation(
+    cfg_path: str | Path,
+    train: bool = True,
+    override: Optional[Dict[str, Any]] = None,
+):
+    """
+    從 YAML 建立 GestureAugmentation。
 
     Args:
         cfg_path:
             YAML 設定檔路徑，例如 config/augmentation/default.yaml
         train:
-            True  = 啟用資料增強。
-            False = 只做 letterbox resize，不做隨機增強。通常 validation/test 用 False。
+            True  = 回傳 training augmentation。
+            False = 回傳 None。val/test 應該使用 transform=None，和 inference 保持一致。
         override:
             可選。用程式臨時覆蓋 YAML 參數。
-            例如：override={"image_size": 224}
+            例如：override={"geometric": {"rotate_limit": 8}}
 
     Returns:
-        GestureAugmentation instance
+        train=True  -> GestureAugmentation instance
+        train=False -> None
     """
+    if not train:
+        return None
+
     cfg_dict = load_yaml(cfg_path)
     if override:
+        # 淺層覆蓋：如果 override geometric，會覆蓋整個 geometric 區塊。
+        # 若要細部覆蓋，建議直接改 YAML 或在呼叫前自行合併 dict。
         cfg_dict.update(override)
 
-    cfg = AugmentationConfig(
-        image_size=int(cfg_dict.get("image_size", 112)),
-        train=bool(train),
-        geometric=cfg_dict.get("geometric", {}),
-        photometric=cfg_dict.get("photometric", {}),
-        na_augmentation=cfg_dict.get("na_augmentation", {}),
-        safety=cfg_dict.get("safety", {}),
-    )
-    return GestureAugmentation(cfg)
+    return build_transform(cfg_dict)
