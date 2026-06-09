@@ -2,10 +2,14 @@
 """Shared inference core: load weights + crop letterbox + N/A heuristic.
 
 Auto-detects weight format by extension:
-    .onnx -> onnxruntime  (submission path; Colab only needs onnxruntime)
-    .pth  -> torch        (dev/eval path; needs build_model + model_cfg)
+    .onnx     -> onnxruntime  (lightweight submission path)
+    .pth      -> torch        (dev/eval path; needs build_model + model_cfg)
+    .ptmodel  -> torch        (Deep Compression archive; decode -> build_model)
 
 predict(crop, landmarks) -> int in {0..5}, with the N/A engineering heuristic.
+
+conf_threshold resolution order:
+    explicit arg  >  calibrated value baked into .ptmodel meta  >  0.5
 """
 
 from __future__ import annotations
@@ -87,23 +91,23 @@ class GesturePredictor:
         self,
         weights_path: str | Path,
         crop_size: int = 112,
-        conf_threshold: float = 0.5,
+        conf_threshold: Optional[float] = None,
         model_builder: Optional[Callable[[dict], "object"]] = None,
         device: str = "cpu",
     ) -> None:
         self.crop_size = crop_size
-        self.conf_threshold = conf_threshold
         self.device = device
 
         weights_path = Path(weights_path)
         self.backend = weights_path.suffix.lower()
 
+        meta_threshold: Optional[float] = None
+
         if self.backend == ".onnx":
             import onnxruntime as ort
             self._session = ort.InferenceSession(str(weights_path),
                                                   providers=["CPUExecutionProvider"])
-            in_names = [i.name for i in self._session.get_inputs()]
-            self._onnx_inputs = in_names  # expected: ["crop", "landmarks"]
+            self._onnx_inputs = [i.name for i in self._session.get_inputs()]  # ["crop","landmarks"]
 
         elif self.backend == ".pth":
             import torch
@@ -117,8 +121,33 @@ class GesturePredictor:
             model.load_state_dict(ckpt["model_state_dict"])
             self._model = model.to(device).eval()
             self._torch = torch
+
+        elif self.backend == ".ptmodel":
+            import torch
+            if model_builder is None:
+                raise ValueError(
+                    ".ptmodel backend requires model_builder=fn(model_cfg)->nn.Module. "
+                    "Pass it explicitly (do not hardcode the model module)."
+                )
+            # Lazy import: only a .ptmodel load pulls in the decoder.
+            from src.compression.baseline import load_ptmodel
+            model_cfg, state_dict, _label_map, meta = load_ptmodel(weights_path)
+            model = model_builder(model_cfg)
+            model.load_state_dict(state_dict)
+            self._model = model.to(device).eval()
+            self._torch = torch
+            meta_threshold = meta.get("best_conf_threshold")
+
         else:
             raise ValueError(f"Unsupported weights format: {weights_path.suffix}")
+
+        # resolve threshold: explicit arg > calibrated meta > 0.5
+        if conf_threshold is not None:
+            self.conf_threshold = float(conf_threshold)
+        elif meta_threshold is not None:
+            self.conf_threshold = float(meta_threshold)
+        else:
+            self.conf_threshold = 0.5
 
     def _forward(self, crop_in: np.ndarray, lm_in: np.ndarray) -> np.ndarray:
         """Return logits (NUM_CLASSES,)."""

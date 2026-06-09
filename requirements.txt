@@ -6,3 +6,5 @@ Pillow>=10.0
 # Inference runtime (CPU sufficient on Colab; both preinstalled there)
 torch>=2.2
 torchvision>=0.17
+onnxruntime>=1.18
+opencv-python>=4.8
