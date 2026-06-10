@@ -671,21 +671,6 @@ Robustness estimate
 
 ---
 
-## ONNX Usage
-
-spec 沒有要求 ONNX。
-
-目前 final path 預設使用：
-
-```txt
-model/gesture_model.ptmodel
-```
-
-ONNX 只保留在 `compress.py` pruning-only fallback 裡，作為 optional deployment / debug output。  
-完整 Deep Compression baseline 不以 ONNX 作為最終壓縮 artifact，因為 Huffman-coded / sparse-indexed representation 不是 standard ONNXRuntime 可以直接執行的 dense tensor graph。
-
----
-
 ## Design Trade-offs
 
 ### 為什麼使用 `.ptmodel`
