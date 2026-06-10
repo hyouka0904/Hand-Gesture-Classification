@@ -94,12 +94,7 @@ def parse_args():
         action="store_true",
         help="Use a balanced mini subset (default 2000/class, 80/20) under <data_root>/mini_train.",
     )
-    p.add_argument(
-        "--mini_per_class",
-        type=int,
-        default=2000,
-        help="Images sampled per class when --mini_train is set.",
-    )
+    
     return p.parse_args()
 
 
@@ -229,7 +224,7 @@ def main():
         build_mini_train(
             image_root=args.image_root,
             output_dir=mini_dir,
-            per_class=args.mini_per_class,
+            per_class=2000,
         )
         args.ann_root = str(mini_dir / ANN_SUBDIR)
         args.cache_root = str(mini_dir / CACHE_SUBDIR)
