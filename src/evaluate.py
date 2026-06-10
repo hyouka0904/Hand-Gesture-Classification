@@ -23,6 +23,8 @@ import numpy as np
 from src.predictor import GesturePredictor
 from src.models.test import build_model
 
+from tqdm import tqdm
+
 NUM_CLASSES = 6
 LABEL_NAMES = ["N/A", "fist", "like", "ok", "one", "palm"]
 
@@ -105,7 +107,7 @@ def main() -> None:
     raw_score = 0
     max_raw = 0
 
-    for npz_path in samples:
+    for npz_path in tqdm(samples, desc="evaluating"):
         data = np.load(npz_path)
 
         crop = data["crop"]
