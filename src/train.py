@@ -6,6 +6,11 @@ an .pth checkpoint — the fixed handoff format consumed by src/compression:
 
     {model_state_dict, model_cfg, label_map, val_acc}
 
+Dataset selection (build_loaders):
+- If a split has a packed .npy cache (from src.tools.pack_cache) AND no augmentation
+  is requested, use PackedHaGRIDDataset (mmap fast path) to fix the I/O bottleneck.
+- Otherwise fall back to HaGRIDv2Dataset (per-sample .npz, supports augmentation).
+
 Augmentation note:
 - Training split can use src.augmentation through --aug_cfg.
 - Validation split always uses transform=None so validation stays consistent
@@ -21,8 +26,9 @@ from typing import Optional
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
+import time
 
-from src.dataset import HaGRIDv2Dataset
+from src.dataset import HaGRIDv2Dataset, PackedHaGRIDDataset
 from src.models.test import build_model   # baseline model; swap for real one later
 
 try:
@@ -73,27 +79,50 @@ def _build_train_transform(aug_cfg: Optional[str]):
     return build_augmentation(aug_cfg, train=True)
 
 
+def _has_packed_cache(cache_root: str | Path, split: str) -> bool:
+    """True if all three packed .npy files exist for this split."""
+    root = Path(cache_root)
+    return (
+        (root / f"{split}_crops.npy").exists()
+        and (root / f"{split}_landmarks.npy").exists()
+        and (root / f"{split}_labels.npy").exists()
+    )
+
+
 def build_loaders(args):
     train_transform = _build_train_transform(args.aug_cfg)
 
-    train_ds = HaGRIDv2Dataset(
-        args.ann_root,
-        args.image_root,
-        args.cache_root,
-        split="train",
-        transform=train_transform,
-        crop_size=args.crop_size,
-    )
+    # Train: the packed cache stores already-letterboxed crops, which cannot be
+    # geometrically augmented (landmarks would desync). So it is only valid when
+    # augmentation is disabled. With augmentation, fall back to the npz dataset.
+    if train_transform is None and _has_packed_cache(args.cache_root, "train"):
+        print("[train] using packed train cache")
+        train_ds = PackedHaGRIDDataset(args.cache_root, split="train")
+    else:
+        print("[train] using npz train cache / raw dataset")
+        train_ds = HaGRIDv2Dataset(
+            args.ann_root,
+            args.image_root,
+            args.cache_root,
+            split="train",
+            transform=train_transform,
+            crop_size=args.crop_size,
+        )
 
-    # validation 不做 augmentation，保持和 inference crop_to_input 一致。
-    val_ds = HaGRIDv2Dataset(
-        args.ann_root,
-        args.image_root,
-        args.cache_root,
-        split="val",
-        transform=None,
-        crop_size=args.crop_size,
-    )
+    # Validation never uses augmentation, so the packed cache is always safe when present.
+    if _has_packed_cache(args.cache_root, "val"):
+        print("[train] using packed val cache")
+        val_ds = PackedHaGRIDDataset(args.cache_root, split="val")
+    else:
+        print("[train] using npz val cache / raw dataset")
+        val_ds = HaGRIDv2Dataset(
+            args.ann_root,
+            args.image_root,
+            args.cache_root,
+            split="val",
+            transform=None,
+            crop_size=args.crop_size,
+        )
 
     train_loader = DataLoader(
         train_ds,

@@ -3,6 +3,10 @@
 
 First run: runs MediaPipeHandPreprocessor on raw images, saves (crop, landmarks) as .npz cache.
 Subsequent runs: loads cache directly, skips MediaPipe.
+
+Two dataset classes:
+    HaGRIDv2Dataset      — reads per-sample .npz (supports augmentation; builds cache if missing)
+    PackedHaGRIDDataset  — reads split-level packed .npy via mmap (fast path, no augmentation)
 """
 
 from __future__ import annotations
@@ -90,7 +94,7 @@ def _build_cache(
                 np.savez_compressed(cache_path, crop=crop, landmarks=landmarks, label=label)
 
 
-# ── Dataset ────────────────────────────────────────────────────────────────────
+# ── Dataset (npz, supports augmentation) ────────────────────────────────────────
 
 class HaGRIDv2Dataset(Dataset):
     """
@@ -148,4 +152,66 @@ class HaGRIDv2Dataset(Dataset):
         landmarks_tensor = torch.from_numpy(
             np.ascontiguousarray(landmarks, dtype=np.float32)
         )                                                   # (21, 2)
+        return crop_tensor, landmarks_tensor, label
+
+
+# ── Packed dataset (mmap .npy, fast path, no augmentation) ───────────────────────
+
+class PackedHaGRIDDataset(Dataset):
+    """Fast training path: read a split's packed .npy cache via mmap.
+
+    Expects the output of `python -m src.tools.pack_cache`:
+        <cache_root>/<split>_crops.npy      (N, S, S, 3) uint8    letterboxed, NOT normalized
+        <cache_root>/<split>_landmarks.npy  (N, 21, 2)   float32  crop-relative [0, 1]
+        <cache_root>/<split>_labels.npy     (N,)         int64
+
+    Why this exists: opening hundreds of thousands of tiny compressed .npz files per epoch
+    is the Windows training I/O bottleneck. One mmap'd .npy per array removes the per-file
+    open/decompress overhead so the DataLoader can keep the GPU fed.
+
+    __getitem__ output is bit-identical to HaGRIDv2Dataset (without augmentation): the packed
+    crop is already letterboxed, so crop_to_input's internal letterbox is a no-op and only the
+    ImageNet normalize + transpose remain. Use ONLY when no augmentation is needed — packed
+    crops cannot be geometrically augmented (landmarks would desync).
+    """
+
+    def __init__(self, cache_root: str | Path, split: str = "train") -> None:
+        cache_root = Path(cache_root)
+        crops_path = cache_root / f"{split}_crops.npy"
+        landmarks_path = cache_root / f"{split}_landmarks.npy"
+        labels_path = cache_root / f"{split}_labels.npy"
+
+        for p in (crops_path, landmarks_path, labels_path):
+            if not p.exists():
+                raise FileNotFoundError(f"Packed cache missing: {p}")
+
+        # mmap_mode='r': keep arrays on disk, page in on access (do not load whole split to RAM).
+        self.crops = np.load(crops_path, mmap_mode="r")          # (N, S, S, 3) uint8
+        self.landmarks = np.load(landmarks_path, mmap_mode="r")  # (N, 21, 2) float32
+        self.labels = np.load(labels_path, mmap_mode="r")        # (N,) int64
+
+        n = len(self.crops)
+        if not (len(self.landmarks) == n == len(self.labels)):
+            raise RuntimeError(
+                f"Packed array length mismatch: crops={len(self.crops)} "
+                f"landmarks={len(self.landmarks)} labels={len(self.labels)}"
+            )
+
+        self.crop_size = int(self.crops.shape[1])  # S, inferred from packed shape
+
+        print(f"[packed_dataset] split='{split}' — {n} samples loaded from packed cache")
+
+    def __len__(self) -> int:
+        return len(self.crops)
+
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor, int]:
+        # Packed crop is letterboxed uint8 (S,S,3). crop_to_input's letterbox is a no-op here;
+        # it applies /255 + ImageNet normalize + transpose -> (3, S, S) float32. This matches
+        # HaGRIDv2Dataset exactly. crop_to_input copies (astype), so the readonly mmap is fine.
+        crop_in = crop_to_input(self.crops[idx], self.crop_size)[0]  # (3, S, S) float32
+        crop_tensor = torch.from_numpy(crop_in)
+        landmarks_tensor = torch.from_numpy(
+            np.array(self.landmarks[idx], dtype=np.float32, copy=True)  # copy: mmap view is readonly
+        )                                                               # (21, 2)
+        label = int(self.labels[idx])
         return crop_tensor, landmarks_tensor, label
