@@ -222,7 +222,7 @@ def main():
     # --mini_train: 先抽樣寫出 mini annotations，再把 ann_root / cache_root 重導到
     # <data_root>/mini_train 之下。image_root 維持不變（mini annotations 的 uuid 仍指向原圖）。
     if args.mini_train:
-        from build_mini_train import build_mini_train
+        from src.build_mini_train import build_mini_train
         mini_dir = data_root / MINI_SUBDIR
         print("[train] --mini_train enabled: building mini subset...")
         build_mini_train(

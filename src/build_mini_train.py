@@ -16,8 +16,8 @@ Two-handed classes are skipped to match _build_cache's behavior.
 
 Usable two ways:
     - imported:   from build_mini_train import build_mini_train
-    - standalone: python build_mini_train.py --data_root data
-                  (reads <data_root>/hagridv2_512, writes <data_root>/mini_train)
+    - standalone: python -m src.build_mini_train --data_root data
+              (reads <data_root>/hagridv2_512, writes <data_root>/mini_train)
 """
 
 from __future__ import annotations
