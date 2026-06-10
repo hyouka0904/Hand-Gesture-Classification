@@ -376,12 +376,6 @@ Mini subset 快速迭代（每 class 2000 張，8:1:1(train, val, test)切，所
 python train.py --mini_train --epochs 10 --batch_size 64 --num_workers 4
 ```
 
-自訂 per-class 數量：
-
-```powershell
-python train.py --mini_train --mini_per_class 500 --epochs 5
-```
-
 自訂 data root：
 
 ```powershell
