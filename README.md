@@ -233,7 +233,9 @@ explicit conf_threshold
 → fallback 0.5
 ```
 
-`baseline.py` 會在 val set 上 sweep threshold，找出 spec raw score 最高的 threshold，存進 `.ptmodel` metadata。
+`baseline.py` 是 compression pipeline，壓縮完後會在 val set 上 sweep threshold，找出 spec raw score 最高的 threshold，存進 `.ptmodel` metadata。
+
+evaluate 正式報分應使用 `--split test`，確保報出來的分數是 compression pipeline 沒看過的資料。
 
 目前 `landmark_gate()` 還是 no-op，永遠回傳 True。後續可加入：
 
@@ -271,7 +273,8 @@ data/
 └── mini_train/         ← mini subset（--mini_train 時自動產生，勿手動修改）
     ├── annotations/
     │   ├── train/
-    │   └── val/
+    │   ├── val/
+    │   └── test/
     └── processed/
 ```
 
@@ -367,7 +370,7 @@ checkpoint format：
 python train.py --epochs 30 --batch_size 64 --num_workers 4
 ```
 
-Mini subset 快速迭代（每 class 2000 張，8:2 切，所有 cache 放在 `data/mini_train/`）：
+Mini subset 快速迭代（每 class 2000 張，8:1:1(train, val, test)切，所有 cache 放在 `data/mini_train/`）：
 
 ```powershell
 python train.py --mini_train --epochs 10 --batch_size 64 --num_workers 4
@@ -623,19 +626,19 @@ src/evaluate.py
 Evaluate original checkpoint：
 
 ```powershell
-python -m src.evaluate --weights checkpoints/gesture_model.pth --cache_root data/test/processed --split val --conf_threshold 0
+python -m src.evaluate --weights checkpoints/gesture_model.pth --cache_root data/test/processed --split test --conf_threshold 0
 ```
 
 Evaluate compressed `.ptmodel`：
 
 ```powershell
-python -m src.evaluate --weights model/gesture_model.ptmodel --cache_root data/test/processed --split val --conf_threshold 0
+python -m src.evaluate --weights model/gesture_model.ptmodel --cache_root data/test/processed --split test --conf_threshold 0
 ```
 
 使用 `.ptmodel` 內校準 threshold：
 
 ```powershell
-python -m src.evaluate --weights model/gesture_model.ptmodel --cache_root data/test/processed --split val
+python -m src.evaluate --weights model/gesture_model.ptmodel --cache_root data/test/processed --split test
 ```
 
 輸出 metrics：
@@ -726,13 +729,13 @@ model/gesture_model.ptmodel
 ### 4. 評估原始 `.pth`
 
 ```powershell
-python -m src.evaluate --weights checkpoints/gesture_model.pth --cache_root data/test/processed --split val --conf_threshold 0
+python -m src.evaluate --weights checkpoints/gesture_model.pth --cache_root data/test/processed --split test --conf_threshold 0
 ```
 
 ### 5. 評估壓縮後 `.ptmodel`
 
 ```powershell
-python -m src.evaluate --weights model/gesture_model.ptmodel --cache_root data/test/processed --split val --conf_threshold 0
+python -m src.evaluate --weights model/gesture_model.ptmodel --cache_root data/test/processed --split test --conf_threshold 0
 ```
 
 若 pipeline 正確，兩邊 confusion matrix 應該接近。  
