@@ -23,7 +23,7 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 
 from src.dataset import HaGRIDv2Dataset
-from src.models.test import build_model   # baseline model; swap for real one later
+from src.models.model import build_model   # baseline model; swap for real one later
 
 try:
     from src.augmentation import build_augmentation
@@ -94,7 +94,8 @@ def build_loaders(args):
         transform=None,
         crop_size=args.crop_size,
     )
-
+    #train_ds.samples = train_ds.samples[:1000]
+    #val_ds.samples = val_ds.samples[:200]
     train_loader = DataLoader(
         train_ds,
         batch_size=args.batch_size,
