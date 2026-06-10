@@ -620,14 +620,19 @@ def compress_from_pth(
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser()
     p.add_argument("--pth_in", required=True)
-    p.add_argument("--ann_root", required=True)
-    p.add_argument("--image_root", required=True)
+    p.add_argument(
+        "--data_root", default="data",
+        help="root holding hagridv2_512/, annotations/, processed/",
+    )
+    p.add_argument(
+        "--mini_train", action="store_true",
+        help="read the mini subset under <data_root>/mini_train (image_root unchanged).",
+    )
 
     p.add_argument("--pruned_pth_out", default=None)
     p.add_argument("--quant_pth_out", default=None)
     p.add_argument("--ptmodel_out", default="model/gesture_model.ptmodel")
 
-    p.add_argument("--cache_root", default="data/processed")
     p.add_argument("--model_module", default="src.models.test")
 
     p.add_argument("--amount", type=float, default=0.5)
@@ -665,9 +670,21 @@ def main() -> None:
     print(f"[baseline] ptmodel    = {args.ptmodel_out}")
     print(f"[baseline] device     = {device}")
 
+    data_root = Path(args.data_root)
+    image_root = str(data_root / "hagridv2_512")  # always the original images
+    if args.mini_train:
+        mini_dir = data_root / "mini_train"
+        ann_root   = str(mini_dir / "annotations")
+        cache_root = str(mini_dir / "processed")
+        print(f"[baseline] mini_train: ann_root={ann_root} cache_root={cache_root} "
+              f"(image_root={image_root} unchanged)")
+    else:
+        ann_root   = str(data_root / "annotations")
+        cache_root = str(data_root / "processed")
+
     model_builder = load_model_builder(args.model_module)
     train_loader, val_loader = build_loaders(
-        ann_root=args.ann_root, image_root=args.image_root, cache_root=args.cache_root,
+        ann_root=ann_root, image_root=image_root, cache_root=cache_root,
         crop_size=args.crop_size, batch_size=args.batch_size, num_workers=args.num_workers,
         device=device, aug_cfg=args.aug_cfg,
     )

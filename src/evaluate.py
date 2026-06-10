@@ -30,7 +30,10 @@ LABEL_NAMES = ["N/A", "fist", "like", "ok", "one", "palm"]
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser()
     p.add_argument("--weights", required=True, help=".pth or .onnx")
-    p.add_argument("--cache_root", default="data/processed")
+    p.add_argument("--data_root", default="data",
+                   help="root holding processed/ (and mini_train/processed/)")
+    p.add_argument("--mini_train", action="store_true",
+                   help="read the mini subset cache under <data_root>/mini_train/processed")
     p.add_argument("--split", default="val")
     p.add_argument("--crop_size", type=int, default=112)
     p.add_argument("--conf_threshold", type=float, default=None,
@@ -87,7 +90,12 @@ def main() -> None:
         device=args.device,
     )
 
-    split_cache = Path(args.cache_root) / args.split
+    if args.mini_train:
+        cache_root = Path(args.data_root) / "mini_train" / "processed"
+    else:
+        cache_root = Path(args.data_root) / "processed"
+
+    split_cache = cache_root / args.split
     samples = sorted(split_cache.rglob("*.npz"))
 
     if not samples:

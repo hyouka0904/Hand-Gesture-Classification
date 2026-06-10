@@ -574,22 +574,30 @@ onnxruntime
 
 ## Compression Commands
 
-小資料快速測試：
+和 `train.py` 一樣，baseline 也只收 `--data_root`（default `data`），底下三個路徑自動推導：
 
-```powershell
-python -m src.compression.baseline --pth_in checkpoints/gesture_model.pth --ann_root data/test/annotations --image_root data/test/hagridv2_512 --cache_root data/test/processed --prune_epochs 1 --ft_epochs 1
+```txt
+image_root = <data_root>/hagridv2_512
+ann_root   = <data_root>/annotations
+cache_root = <data_root>/processed
 ```
 
-完整預設測試：
+mini subset 壓縮（加 `--mini_train`，ann/cache 切到 `<data_root>/mini_train` 下，image_root 不變）：
 
 ```powershell
-python -m src.compression.baseline --pth_in checkpoints/gesture_model.pth --ann_root data/test/annotations --image_root data/test/hagridv2_512 --cache_root data/test/processed
+python -m src.compression.baseline --pth_in checkpoints/mini/gesture_model.pth --mini_train --prune_epochs 1 --ft_epochs 1
 ```
 
-正式資料：
+正式資料（全量）：
 
 ```powershell
-python -m src.compression.baseline --pth_in checkpoints/gesture_model.pth --ann_root data/annotations --image_root data/hagridv2_512 --cache_root data/processed
+python -m src.compression.baseline --pth_in checkpoints/gesture_model.pth
+```
+
+自訂 data root：
+
+```powershell
+python -m src.compression.baseline --pth_in checkpoints/gesture_model.pth --data_root D:/datasets/hagrid
 ```
 
 成功 log 應包含：
@@ -623,22 +631,31 @@ src/evaluate.py
 
 三種都透過 `GesturePredictor` 推論。
 
+跟其他 entry 一樣只收 `--data_root`（default `data`），cache 讀 `<data_root>/processed`；
+加 `--mini_train` 則讀 `<data_root>/mini_train/processed`。
+
 Evaluate original checkpoint：
 
 ```powershell
-python -m src.evaluate --weights checkpoints/gesture_model.pth --cache_root data/test/processed --split test --conf_threshold 0
+python -m src.evaluate --weights checkpoints/gesture_model.pth --split val --conf_threshold 0
 ```
 
 Evaluate compressed `.ptmodel`：
 
 ```powershell
-python -m src.evaluate --weights model/gesture_model.ptmodel --cache_root data/test/processed --split test --conf_threshold 0
+python -m src.evaluate --weights model/gesture_model.ptmodel --split val --conf_threshold 0
 ```
 
 使用 `.ptmodel` 內校準 threshold：
 
 ```powershell
-python -m src.evaluate --weights model/gesture_model.ptmodel --cache_root data/test/processed --split test
+python -m src.evaluate --weights model/gesture_model.ptmodel --split val
+```
+
+Evaluate mini subset：
+
+```powershell
+python -m src.evaluate --weights model/gesture_model.ptmodel --mini_train --split val
 ```
 
 輸出 metrics：
@@ -657,97 +674,6 @@ Model Size score
 Basic Performance estimate
 Robustness estimate
 ```
-
----
-
-## Local Compression Pipeline Test
-
-這段只測 compression pipeline 是否能吃到正確 I/O，不代表模型真的好。
-
-### 1. 準備小 HaGRID subset
-
-資料夾結構：
-
-```txt
-data/test/
-├── make_subset.py
-├── annotations/
-│   ├── train/
-│   └── val/
-├── hagridv2_512/
-│   ├── fist/
-│   ├── like/
-│   ├── ok/
-│   ├── one/
-│   ├── palm/
-│   └── no_gesture/
-└── processed/
-    ├── train/
-    └── val/
-```
-
-建立 subset：
-
-```powershell
-python data/test/make_subset.py
-```
-
-建議 subset：
-
-```txt
-train: 每類 50 張
-val: 每類 20 張
-classes: fist, like, ok, one, palm, no_gesture
-```
-
-### 2. 訓練 tiny real-data test model
-
-```powershell
-python -m src.train --ann_root data/test/annotations --image_root data/test/hagridv2_512 --cache_root data/test/processed --epochs 1 --batch_size 16 --num_workers 0 --aug_cfg none --output_dir checkpoints
-```
-
-預期輸出：
-
-```txt
-checkpoints/gesture_model.pth
-```
-
-### 3. 跑完整 Deep Compression baseline
-
-```powershell
-python -m src.compression.baseline --pth_in checkpoints/gesture_model.pth --ann_root data/test/annotations --image_root data/test/hagridv2_512 --cache_root data/test/processed --prune_epochs 1 --ft_epochs 1
-```
-
-預期輸出：
-
-```txt
-checkpoints/gesture_model_pruned50.pth
-checkpoints/gesture_model_pruned50_quant.pth
-model/gesture_model.ptmodel
-```
-
-### 4. 評估原始 `.pth`
-
-```powershell
-python -m src.evaluate --weights checkpoints/gesture_model.pth --cache_root data/test/processed --split test --conf_threshold 0
-```
-
-### 5. 評估壓縮後 `.ptmodel`
-
-```powershell
-python -m src.evaluate --weights model/gesture_model.ptmodel --cache_root data/test/processed --split test --conf_threshold 0
-```
-
-若 pipeline 正確，兩邊 confusion matrix 應該接近。  
-若 `.ptmodel` 的 decode round-trip 完全正確，壓縮後模型行為應與 quantized in-memory model 一致。
-
-### 6. 測 submission import path
-
-```powershell
-python -c "from inference import predict; import numpy as np; print(predict(np.zeros((100,100,3),dtype='uint8'), np.zeros((21,2),dtype='float32')))"
-```
-
-預期輸出是一個 `{0,1,2,3,4,5}` 的 int。通常 dummy input 應該會是 `0`。
 
 ---
 
