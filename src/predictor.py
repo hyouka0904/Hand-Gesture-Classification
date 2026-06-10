@@ -118,6 +118,7 @@ class GesturePredictor:
                 )
             ckpt = torch.load(weights_path, map_location=device)
             model = model_builder(ckpt.get("model_cfg", {}))
+            meta_threshold = ckpt.get("best_conf_threshold")
             model.load_state_dict(ckpt["model_state_dict"])
             self._model = model.to(device).eval()
             self._torch = torch
