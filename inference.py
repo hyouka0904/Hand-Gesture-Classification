@@ -27,12 +27,14 @@ _predictor: GesturePredictor | None = None
 def _get_predictor() -> GesturePredictor:
     global _predictor
     if _predictor is None:
+        print("[inference] loading model...", flush=True)
         _predictor = GesturePredictor(
             weights_path=_WEIGHTS,
             crop_size=112,
             conf_threshold=None,        # None -> use the threshold calibrated into the .ptmodel
             model_builder=build_model,  # caller picks the model module (predictor stays generic)
         )
+        print("[inference] model ready.", flush=True)
     return _predictor
 
 
