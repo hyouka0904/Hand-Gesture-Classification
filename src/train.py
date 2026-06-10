@@ -6,6 +6,12 @@ an .pth checkpoint — the fixed handoff format consumed by src/compression:
 
     {model_state_dict, model_cfg, label_map, val_acc}
 
+Paths: a single --data_root (default data/) holds everything. The three roots are
+derived under it:
+    image_root = <data_root>/hagridv2_512
+    ann_root   = <data_root>/annotations
+    cache_root = <data_root>/processed
+
 Dataset selection (build_loaders) is fully automatic — no separate pack step needed:
 - Packed .npy cache present   -> PackedHaGRIDDataset (mmap fast path).
 - Only per-sample .npz present -> auto-pack -> PackedHaGRIDDataset.
@@ -17,6 +23,14 @@ Augmentation note:
 - Training split can use src.augmentation through --aug_cfg.
 - Validation split always uses transform=None so validation stays consistent
   with inference preprocessing (and is therefore always safe to pack).
+
+Mini-train note:
+- --mini_train samples a balanced subset (default 2000/class, 80/20) via
+  build_mini_train, then redirects ann_root + cache_root under
+  <data_root>/mini_train so ALL generated files (annotations, .npz, packed .npy)
+  stay inside the mini dir and never touch the full-dataset cache. image_root is
+  left unchanged — the mini annotations reference uuids that still live under the
+  original images.
 """
 
 from __future__ import annotations
@@ -42,12 +56,20 @@ except ImportError:
 
 LABEL_MAP = {0: "N/A", 1: "fist", 2: "like", 3: "ok", 4: "one", 5: "palm"}
 
+# Subdirectory layout under --data_root
+IMAGE_SUBDIR = "hagridv2_512"
+ANN_SUBDIR = "annotations"
+CACHE_SUBDIR = "processed"
+MINI_SUBDIR = "mini_train"
+
 
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument("--ann_root", required=True)
-    p.add_argument("--image_root", required=True)
-    p.add_argument("--cache_root", default="data/processed")
+    p.add_argument(
+        "--data_root",
+        default="data",
+        help="root holding hagridv2_512/, annotations/, processed/ (and mini_train/).",
+    )
     p.add_argument("--epochs", type=int, default=5)
     p.add_argument("--batch_size", type=int, default=64)
     p.add_argument("--lr", type=float, default=1e-3)
@@ -60,8 +82,22 @@ def parse_args():
     # 若不想使用 augmentation，可以傳 --aug_cfg none 或直接不填。
     p.add_argument(
         "--aug_cfg",
-        default="config/augmentation/default.yaml",
+        default="none",
         help="Path to augmentation YAML. Use 'none' to disable training augmentation.",
+    )
+
+    # Mini-train 設定。預設 False；開啟後抽樣每 class 2000 張、8:2 切，
+    # 所有暫存檔（annotations / .npz / packed .npy）都放在 <data_root>/mini_train 下。
+    p.add_argument(
+        "--mini_train",
+        action="store_true",
+        help="Use a balanced mini subset (default 2000/class, 80/20) under <data_root>/mini_train.",
+    )
+    p.add_argument(
+        "--mini_per_class",
+        type=int,
+        default=2000,
+        help="Images sampled per class when --mini_train is set.",
     )
     return p.parse_args()
 
@@ -176,6 +212,32 @@ def evaluate_acc(model, loader, device):
 
 def main():
     args = parse_args()
+
+    # Derive the three roots under --data_root.
+    data_root = Path(args.data_root)
+    args.image_root = str(data_root / IMAGE_SUBDIR)
+    args.ann_root = str(data_root / ANN_SUBDIR)
+    args.cache_root = str(data_root / CACHE_SUBDIR)
+
+    # --mini_train: 先抽樣寫出 mini annotations，再把 ann_root / cache_root 重導到
+    # <data_root>/mini_train 之下。image_root 維持不變（mini annotations 的 uuid 仍指向原圖）。
+    if args.mini_train:
+        from build_mini_train import build_mini_train
+        mini_dir = data_root / MINI_SUBDIR
+        print("[train] --mini_train enabled: building mini subset...")
+        build_mini_train(
+            image_root=args.image_root,
+            output_dir=mini_dir,
+            per_class=args.mini_per_class,
+        )
+        args.ann_root = str(mini_dir / ANN_SUBDIR)
+        args.cache_root = str(mini_dir / CACHE_SUBDIR)
+        print(f"[train] mini_train paths -> ann_root={args.ann_root} "
+              f"cache_root={args.cache_root} (image_root={args.image_root} unchanged)")
+    else:
+        print(f"[train] paths -> image_root={args.image_root} "
+              f"ann_root={args.ann_root} cache_root={args.cache_root}")
+
     device = args.device
     model_cfg = {"crop_size": args.crop_size}
 
