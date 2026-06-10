@@ -47,6 +47,7 @@ from tqdm import tqdm
 from src.dataset import HaGRIDv2Dataset, PackedHaGRIDDataset, _build_cache
 from src.models.test import build_model   # baseline model; swap for real one later
 from src.tools.pack_cache import pack_split
+from src.compression.baseline import calibrate_threshold
 
 try:
     from src.augmentation import build_augmentation
@@ -270,8 +271,10 @@ def main():
 
         if val_acc >= best_acc:
             best_acc = val_acc
+            best_tau, calib = calibrate_threshold(model, val_loader, device)
             torch.save(
                 {
+                    "best_conf_threshold": best_tau,
                     "model_state_dict": model.state_dict(),
                     "model_cfg": model_cfg,
                     "label_map": LABEL_MAP,
