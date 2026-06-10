@@ -1,88 +1,147 @@
 #!/usr/bin/env python3
-"""Baseline gesture model — fast to train, correct I/O.
+"""Baseline gesture model.
 
-Dual-branch design (kept identical to the eventual MobileNetV3 version):
-    image branch    : tiny CNN  (later -> MobileNetV3-Small)
-    landmark branch : wrist-relative normalize -> 42-d MLP
-    fusion          : concat embeddings -> 6-class head
+Dual-branch classifier:
 
-forward(crop, landmarks) -> logits (B, 6)
-build_model(model_cfg)   -> nn.Module   (seam used by compression / predictor)
+    crop image
+    -> MobileNetV3-Small image branch
+    -> image embedding
+                         \
+                          concat -> classifier head -> logits
+                         /
+    landmarks
+    -> wrist-relative normalized landmark MLP
+    -> landmark embedding
+
+Forward contract:
+    model(crop, landmarks) -> logits
+
+Shapes:
+    crop      : (B, 3, 112, 112)
+    landmarks : (B, 21, 2)
+    logits    : (B, 6)
 """
 
 from __future__ import annotations
 
+from typing import Any
+
 import torch
 import torch.nn as nn
+from torchvision.models import MobileNet_V3_Small_Weights, mobilenet_v3_small
 
-NUM_CLASSES = 6  # 0=N/A, 1=fist, 2=like, 3=ok, 4=one, 5=palm
+NUM_CLASSES = 6
 
 
-class _TinyCNN(nn.Module):
-    """Placeholder image backbone. Swap for MobileNetV3-Small later."""
-
-    def __init__(self, out_dim: int = 64) -> None:
+class ImageBranch(nn.Module):
+    def __init__(
+        self,
+        out_dim: int = 128,
+        pretrained: bool = False,
+        dropout: float = 0.2,
+    ) -> None:
         super().__init__()
-        self.net = nn.Sequential(
-            nn.Conv2d(3, 16, 3, stride=2, padding=1), nn.BatchNorm2d(16), nn.ReLU(inplace=True),   # 112 -> 56
-            nn.Conv2d(16, 32, 3, stride=2, padding=1), nn.BatchNorm2d(32), nn.ReLU(inplace=True),  # 56 -> 28
-            nn.Conv2d(32, 64, 3, stride=2, padding=1), nn.BatchNorm2d(64), nn.ReLU(inplace=True),  # 28 -> 14
-            nn.AdaptiveAvgPool2d(1),                                                                # -> (B,64,1,1)
+
+        weights = MobileNet_V3_Small_Weights.DEFAULT if pretrained else None
+        backbone = mobilenet_v3_small(weights=weights)
+
+        self.features = backbone.features
+        self.avgpool = backbone.avgpool
+
+        in_dim = backbone.classifier[0].in_features
+
+        self.proj = nn.Sequential(
+            nn.Linear(in_dim, out_dim),
+            nn.Hardswish(inplace=True),
+            nn.Dropout(dropout),
         )
         self.out_dim = out_dim
-        self.proj = nn.Identity() if out_dim == 64 else nn.Linear(64, out_dim)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.net(x).flatten(1)  # (B, 64)
+    def forward(self, crop: torch.Tensor) -> torch.Tensor:
+        x = self.features(crop)
+        x = self.avgpool(x)
+        x = torch.flatten(x, 1)
         return self.proj(x)
 
 
-class _LandmarkMLP(nn.Module):
-    """21x2 landmarks -> wrist-relative normalize -> 42-d -> embedding."""
-
-    def __init__(self, out_dim: int = 32) -> None:
+class LandmarkBranch(nn.Module):
+    def __init__(
+        self,
+        out_dim: int = 64,
+        hidden_dim: int = 128,
+        dropout: float = 0.1,
+    ) -> None:
         super().__init__()
+
         self.net = nn.Sequential(
-            nn.Linear(42, 64), nn.ReLU(inplace=True),
-            nn.Linear(64, out_dim), nn.ReLU(inplace=True),
+            nn.Linear(42, hidden_dim),
+            nn.ReLU(inplace=True),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, out_dim),
+            nn.ReLU(inplace=True),
         )
         self.out_dim = out_dim
 
     def forward(self, landmarks: torch.Tensor) -> torch.Tensor:
-        # landmarks: (B, 21, 2) — normalize relative to wrist (point 0), scale by span
-        wrist = landmarks[:, 0:1, :]                      # (B, 1, 2)
-        rel = landmarks - wrist                           # translation invariant
+        wrist = landmarks[:, 0:1, :]
+        rel = landmarks - wrist
+
         span = rel.abs().amax(dim=(1, 2), keepdim=True).clamp(min=1e-6)
-        rel = rel / span                                  # scale invariant
-        return self.net(rel.flatten(1))                   # (B, out_dim)
+        rel = rel / span
+
+        return self.net(rel.flatten(1))
 
 
 class GestureNet(nn.Module):
-    def __init__(self, crop_size: int = 112, img_dim: int = 64, lm_dim: int = 32) -> None:
+    def __init__(
+        self,
+        crop_size: int = 112,
+        image_dim: int = 128,
+        landmark_dim: int = 64,
+        landmark_hidden_dim: int = 128,
+        head_hidden_dim: int = 128,
+        dropout: float = 0.2,
+        pretrained: bool = False,
+    ) -> None:
         super().__init__()
+
         self.crop_size = crop_size
-        self.image_branch = _TinyCNN(out_dim=img_dim)
-        self.landmark_branch = _LandmarkMLP(out_dim=lm_dim)
+
+        self.image_branch = ImageBranch(
+            out_dim=image_dim,
+            pretrained=pretrained,
+            dropout=dropout,
+        )
+
+        self.landmark_branch = LandmarkBranch(
+            out_dim=landmark_dim,
+            hidden_dim=landmark_hidden_dim,
+            dropout=dropout * 0.5,
+        )
+
         self.head = nn.Sequential(
-            nn.Linear(img_dim + lm_dim, 64), nn.ReLU(inplace=True),
-            nn.Dropout(0.2),
-            nn.Linear(64, NUM_CLASSES),
+            nn.Linear(image_dim + landmark_dim, head_hidden_dim),
+            nn.ReLU(inplace=True),
+            nn.Dropout(dropout),
+            nn.Linear(head_hidden_dim, NUM_CLASSES),
         )
 
     def forward(self, crop: torch.Tensor, landmarks: torch.Tensor) -> torch.Tensor:
-        # crop expected already resized to (B, 3, crop_size, crop_size) by the
-        # transform (train) or predictor letterbox (inference).
-        img_emb = self.image_branch(crop)
-        lm_emb = self.landmark_branch(landmarks)
-        fused = torch.cat([img_emb, lm_emb], dim=1)
+        image_emb = self.image_branch(crop)
+        landmark_emb = self.landmark_branch(landmarks)
+        fused = torch.cat([image_emb, landmark_emb], dim=1)
         return self.head(fused)
 
 
-def build_model(model_cfg: dict | None = None) -> nn.Module:
-    """Seam used by compression / predictor. cfg keys are all optional here."""
+def build_model(model_cfg: dict[str, Any] | None = None) -> nn.Module:
     cfg = model_cfg or {}
+
     return GestureNet(
         crop_size=cfg.get("crop_size", 112),
-        img_dim=cfg.get("img_dim", 64),
-        lm_dim=cfg.get("lm_dim", 32),
+        image_dim=cfg.get("image_dim", 128),
+        landmark_dim=cfg.get("landmark_dim", 64),
+        landmark_hidden_dim=cfg.get("landmark_hidden_dim", 128),
+        head_hidden_dim=cfg.get("head_hidden_dim", 128),
+        dropout=cfg.get("dropout", 0.2),
+        pretrained=cfg.get("pretrained", False),
     )

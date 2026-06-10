@@ -77,4 +77,5 @@ team_*.zip
 # Others
 sample_preprocessed_outputs/
 *.pdf
-
+*.task
+model/

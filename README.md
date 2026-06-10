@@ -1,350 +1,876 @@
 # Hand Gesture Classification on Edge Devices
-> CS3570 Multimedia Technology — Final Project
+
+> CS3570 Multimedia Technology — Final Project  
 > Challenge from Microsoft | HaGRIDv2 · 2026
 
 ---
 
 ## Overview
 
-一個 compact(≤ 10 MB)的 hand-gesture classifier，跑在 edge device 上。
-模型吃 TA 提供的 preprocessing module 產生的 **cropped hand image** +
-**21 個 MediaPipe landmark 座標**，輸出六個 class index 之一:
+本專案目標是做一個可部署在 edge device 上的 compact hand-gesture classifier，模型大小需控制在 10 MB 以內。
+
+TA 提供 preprocessing module，負責：
+
+```txt
+full image
+→ hand detection
+→ cropped hand image
+→ 21 hand landmark coordinates
+```
+
+我們只負責 downstream classifier。模型只會收到：
+
+```txt
+cropped_img : RGB hand crop
+landmarks   : 21 個 2D hand landmarks
+```
+
+輸出六個 class 之一：
 
 | Index | Label | 說明 |
-|-------|-------|------|
-| 0 | N/A | 其他所有手勢 / 未知 |
+|---:|---|---|
+| 0 | N/A | 非目標手勢 / 未知 / 無效姿勢 |
 | 1 | fist | 握拳 |
-| 2 | like | 讚(豎大拇指) |
+| 2 | like | 讚 / 大拇指 |
 | 3 | ok | OK 手勢 |
 | 4 | one | 食指比一 |
 | 5 | palm | 張開手掌 |
 
-下游 classifier 是我們唯一要做的部分。hand detection 與 landmark extraction
-是固定的，由 TA 提供(`hand_preprocess.py`，MediaPipe)。我們不會拿到
-full-frame 影像。
+hand detection 和 landmark extraction 不是本專案要做的部分。不能使用 full-frame raw image 作為 model input。
 
 ---
 
 ## Repository Structure
 
-```
+```txt
 .
-├── inference.py              # Submission entry point (FIXED): predict(crop, landmarks) -> int
-├── hand_preprocess.py        # TA-provided MediaPipe preprocessing. Local demo / data-prep only,
-│                             #   NOT packed into the submission zip.
-├── model/                    # Final weights for submission (spec-mandated zip folder, singular)
-│   └── gesture_model.*       #   e.g. gesture_model.onnx or .pth, must be <= 10 MB
+├── inference.py
+├── hand_preprocess.py
+├── train.py
+├── model/
+│   └── gesture_model.ptmodel
+├── checkpoints/
+│   ├── gesture_model.pth
+│   ├── gesture_model_pruned50.pth
+│   └── gesture_model_pruned50_quant.pth
 ├── src/
-│   ├── predictor.py          # Shared inference core: load weights + crop preprocessing + N/A heuristic
-│   ├── dataset.py            # HaGRIDv2 + landmark-annotation loader
-│   ├── train.py              # Shared training driver
-│   ├── evaluate.py           # Shared evaluation / confusion matrix driver
-│   ├── augmentation/         # Work split #1
-│   ├── models/               # Work split #2 (plural — may hold multiple architectures)
-│   └── compression/          # Work split #3
+│   ├── predictor.py
+│   ├── dataset.py
+│   ├── evaluate.py
+│   ├── build_mini_train.py
+│   ├── augmentation/
+│   ├── models/
+│   │   └── test.py
+│   └── compression/
+│       ├── compress.py
+│       └── baseline.py
 ├── config/
-│   ├── augmentation/         # YAML configs for augmentation pipelines
-│   ├── models/               # YAML configs for model architectures / hyperparameters
-│   └── compression/          # YAML configs for compression schemes
-├── requirements.txt          # Inference-only deps (no mediapipe / no training deps)
-├── requirements-train.txt    # Full training deps
+│   ├── augmentation/
+│   ├── models/
+│   └── compression/
+├── data/
+│   └── test/
+├── requirements.txt
+├── requirements-train.txt
 ├── README.md
 └── .gitignore
 ```
 
-> **`model/` vs `src/models/`** — 這是刻意的，不是筆誤。
-> top-level **`model/`**(單數)是 spec 規定、放最終單一 weight 檔的資料夾。
-> **`src/models/`**(複數)是 architecture 的程式碼，可以定義多個候選 model。
+```txt
+model/
+```
+
+放最終 submission 會使用的 model artifact，目前預設是：
+
+```txt
+model/gesture_model.ptmodel
+```
+
+```txt
+src/models/
+```
+
+放 model architecture 定義。現在的 `src.models.test` 只是測 compression pipeline 的 placeholder model，不是最終 baseline model。
+
+```txt
+checkpoints/
+```
+
+放 training / compression 中間 checkpoint，不會放進最終 submission zip。
 
 ---
 
-## The `predict()` Interface (read this carefully)
+## Submission Interface
 
-TA 的 evaluation harness 會先跑 preprocessing，再 `from inference import predict`
-直接呼叫。**檔名 `inference.py` 與 `predict` 的 signature 是固定的** —— 不能改名、
-也不能加參數，因為 harness 就是照原樣 import。
+TA evaluator 會先跑 TA 提供的 preprocessing，再 import 我們的 `inference.py`：
 
 ```python
-import numpy as np
+from inference import predict
+```
 
+`inference.py` 必須放在 zip 最上層，且必須實作：
+
+```python
 def predict(cropped_img: np.ndarray, landmarks: np.ndarray) -> int:
-    """
-    Args:
-        cropped_img : np.ndarray, shape (H, W, 3), dtype uint8, RGB.
-                      VARIABLE size — it is the hand bbox cropped with ~30%
-                      padding by the TA preprocessor (see hand_preprocess.py).
-        landmarks   : np.ndarray, shape (21, 2), dtype float32.
-                      x, y ONLY (no z). Coordinates are normalized to [0, 1]
-                      RELATIVE TO THE CROP BOX, not to the original image.
-    Returns:
-        int in {0, 1, 2, 3, 4, 5}
-        0 = N/A, 1 = fist, 2 = like, 3 = ok, 4 = one, 5 = palm
-    """
-    ...
     return final_decision_class
 ```
 
-**Exact I/O contract(對照 `hand_preprocess.py` 確認過):**
+Input contract：
 
 | Input | Shape | dtype | 說明 |
-|-------|-------|-------|------|
-| `cropped_img` | `(H, W, 3)` | `uint8` | RGB，**尺寸不固定**，bbox + 約 30% padding |
-| `landmarks` | `(21, 2)` | `float32` | **只有 x, y、沒有 z**;正規化 [0,1]，**對 crop 相對** |
+|---|---|---|---|
+| `cropped_img` | `(H, W, 3)` | `uint8` | RGB hand crop，尺寸不固定 |
+| `landmarks` | `(21, 2)` | `float32` | x, y 座標，已 normalize 到 crop 座標系 |
+| return | scalar | `int` | class id in `{0,1,2,3,4,5}` |
 
-> preprocessor(`detect_hand`)只取 `point.x, point.y`，所以 classifier 永遠
-> 收到 `(21, 2)` 的 array。**不要**設計任何依賴 z 座標的 feature 或 model branch。
+所有 `inference.py` 內的 path 都要相對於 `inference.py`。
 
-`inference.py` 裡所有 path 都必須**相對於 `inference.py`**。
+目前 `inference.py` 預設載入：
 
----
-
-## Design Notes — How Each Side Should Be Built
-
-### Image branch (the crop)
-- crop 尺寸不固定，所以 `src/predictor.py` 必須先把它 resize 到固定輸入
-  (例如 112×112)再進 backbone。
-- 用 **pad-resize**(letterbox)保持長寬比，避免把手的形狀拉變形，之後做
-  ImageNet normalization。
-- Backbone:**MobileNetV3-Small**(ImageNet-pretrained，spec 允許;也能壓在
-  10 MB 預算內)。
-
-### Landmark branch (the 21 points)
-- 輸入是 `(21, 2)` 的 crop 相對座標。為了 translation / scale invariance，
-  建議以 **wrist(第 0 點)**為原點重新正規化，再除以手部 span。
-- 兩種可用形式:攤平成 **42 維 vector → 小型 MLP**，或計算 **geometric
-  feature**(手指關節角度 / 指尖距離)同時當作 N/A rule。
-- **沒有 z 可用**，所以 depth-based feature 都不行。
-
-### Fusion and N/A
-- 把 image embedding 與 landmark embedding concat，後面接一個 6 類的
-  classifier head。
-- N/A **不是**單純取 network argmax。spec 鼓勵 engineering heuristic:用
-  **softmax confidence threshold** 加上 **landmark-rule gate**(例如拒絕不合理
-  的手部幾何)來壓 false trigger。
-- 偏向 N/A:一次 false trigger 扣 **−2**，答對只 **+1**。
+```txt
+model/gesture_model.ptmodel
+```
 
 ---
 
-## Model / Compression Selection (config mechanism)
+## Model I/O Contract
 
-因為 `predict()` 不能加 selection 參數，各 work split 的變體選擇放在
-`src/predictor.py` + `config/`:
+training、compression、evaluation、inference 必須使用同一個 model forward signature：
 
 ```python
-GesturePredictor(
-    model_name="mobilenetv3_small",   # picks config/models/<name>.yaml
-    compression_name="none",          # picks config/compression/<name>.yaml
-    aug_name="default",               # provenance only (training-time)
-)
+logits = model(crop, landmarks)
 ```
 
-- 每個部分都有 **default**，繳交的 `inference.py` 就用 default 實例化
-  `GesturePredictor`。
-- 每個 `config/<part>/*.yaml` 描述一個變體(augmentation pipeline 參數 /
-  model architecture + hyperparameter / compression scheme)。
-- augmentation 是 training-time 的事;它放進同一套 config schema 只是為了
-  reproducibility，真正影響 inference 時所載入 weight 的只有 **model +
-  compression**。
+Tensor shape：
+
+```txt
+crop      : (B, 3, 112, 112)
+landmarks : (B, 21, 2)
+logits    : (B, 6)
+```
+
+`crop` 由 shared preprocessing 產生：
+
+```txt
+cropped_img
+→ letterbox resize to 112 × 112
+→ ImageNet normalization
+→ CHW tensor
+```
+
+`landmarks` 維持 `(21, 2)`，若需要 wrist-relative normalization，應在 model 的 landmark branch 內處理。
 
 ---
 
-## Environment Setup
+## Model Design
 
-### 1. Create conda environment (Python 3.10)
+預期架構是 dual-branch classifier：
 
-```bash
-conda create -n gesture-cls python=3.10 -y
-conda activate gesture-cls
+```txt
+image crop
+→ image branch
+→ image embedding
+             \
+              concat → classifier head → logits
+             /
+landmarks
+→ landmark branch
+→ landmark embedding
 ```
 
-> **為什麼是 3.10?** Google Colab 的 default runtime 是 Python 3.10。
-> MediaPipe 0.10.x 在 3.11 有 protobuf 衝突、在 3.12 wheel 不完整。3.10 對所有
-> dependency 最穩，而且官方評分就是在 fresh Colab runtime 上跑。
+建議 final image branch：
 
-### 2. Install dependencies
-
-**Inference only**(對齊 Colab 繳交環境 —— 不含 MediaPipe，因為 preprocessing
-由 TA 提供):
-```bash
-pip install -r requirements.txt
+```txt
+MobileNetV3-Small
 ```
 
-**Full training environment**:
-```bash
-pip install -r requirements-train.txt
+建議 landmark branch：
+
+```txt
+wrist-relative normalization
+→ scale normalization
+→ flatten 21 × 2 into 42-d vector
+→ small MLP
 ```
 
-### 3. GPU support (optional, training only)
+目前 `src.models.test` 是 tiny dual-branch model，只用來測試：
 
-```bash
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+```txt
+.pth checkpoint 格式
+model(crop, landmarks) I/O
+compression pipeline
+.ptmodel decode + inference
 ```
+
+---
+
+## N/A Handling
+
+N/A 不是單純 network argmax。
+
+目前 inference path 在：
+
+```txt
+src/predictor.py
+```
+
+決策流程：
+
+```txt
+logits
+→ softmax
+→ argmax
+→ confidence threshold
+→ landmark gate
+→ final class
+```
+
+`conf_threshold` 解析順序：
+
+```txt
+explicit conf_threshold
+→ .ptmodel meta["best_conf_threshold"]
+→ fallback 0.5
+```
+
+`baseline.py` 是 compression pipeline，壓縮完後會在 val set 上 sweep threshold，找出 spec raw score 最高的 threshold，存進 `.ptmodel` metadata。
+
+evaluate 正式報分應使用 `--split test`，確保報出來的分數是 compression pipeline 沒看過的資料。
+
+目前 `landmark_gate()` 還是 no-op，永遠回傳 True。後續可加入：
+
+```txt
+finger joint angle sanity check
+fingertip distance sanity check
+hand span sanity check
+invalid / distorted pose rejection
+```
+
+因為 false trigger 會扣 -2，所以 inference 應偏保守。
 
 ---
 
 ## Dataset
 
-本專案使用 **HaGRIDv2 512px** 輕量版(`min_side = 512`，約 119.4 GB)，依 spec
-規定。下載 image 與 landmark annotation:
+官方 dataset 是 HaGRIDv2 512px。
 
-```bash
-# Images (512px lightweight version)
-wget https://rndml-team-cv.obs.ru-moscow-1.hc.sbercloud.ru/datasets/hagrid_v2/hagridv2_512.zip
-unzip hagridv2_512.zip -d data/hagridv2_512
+建議資料結構：
 
-# Annotations (contain MediaPipe hand_landmarks — usable directly as the 21-point input)
-wget https://rndml-team-cv.obs.ru-moscow-1.hc.sbercloud.ru/datasets/hagrid_v2/annotations_with_landmarks/annotations.zip
-unzip annotations.zip -d data/annotations
-```
-
-建議的本機結構:
-```
+```txt
 data/
 ├── hagridv2_512/
-│   ├── fist/   like/   ok/   one/   palm/      # 5 target classes
-│   └── <other one-handed classes>/             # N/A training pool (see below)
-└── annotations/
-    ├── train/   val/   test/                   # *.json per class, with hand_landmarks
+│   ├── fist/
+│   ├── like/
+│   ├── ok/
+│   ├── one/
+│   ├── palm/
+│   └── ...
+├── annotations/
+│   ├── train/
+│   ├── val/
+│   └── test/
+├── processed/          ← 全量 MediaPipe cache + packed .npy（自動產生）
+└── mini_train/         ← mini subset（--mini_train 時自動產生，勿手動修改）
+    ├── annotations/
+    │   ├── train/
+    │   ├── val/
+    │   └── test/
+    └── processed/
 ```
 
-### N/A class composition (important)
+若解壓後多包一層資料夾，要把內容移上來。
 
-spec 規定 N/A 樣本**只用單手非目標手勢**，**雙手類別要排除**。HaGRIDv2 共有
-33 個 gesture class:
+例如：
 
-- 5 個是 target(`fist`, `like`, `ok`, `one`, `palm`)。
-- 7 個是**雙手** → **從 N/A 排除**:
-  `hand_heart`, `hand_heart2`, `thumb_index2`, `timeout`, `holy`,
-  `take_picture`, `xsign`。
-- 剩下的 **21 個單手非目標** class **+ `no_gesture` class** 組成 N/A 的
-  training pool。
+```txt
+data/annotations/annotations/train
+```
 
-> ⚠️ **不要**把 dataset commit 進 git。它已列在 `.gitignore`。
+應改成：
+
+```txt
+data/annotations/train
+```
+
+例如：
+
+```txt
+data/hagridv2_512/HaGRIDv2_dataset_512/fist
+```
+
+應改成：
+
+```txt
+data/hagridv2_512/fist
+```
+
+Target classes：
+
+```txt
+fist
+like
+ok
+one
+palm
+```
+
+N/A 應使用 one-handed non-target gestures 加上 `no_gesture`。
+
+two-handed classes 不應放入 N/A：
+
+```txt
+hand_heart
+hand_heart2
+thumb_index2
+timeout
+holy
+take_picture
+xsign
+```
 
 ---
 
 ## Training
 
-```bash
-python -m src.train \
-    --data_root data/hagridv2_512 \
-    --ann_root  data/annotations \
-    --model_cfg config/models/mobilenetv3_small.yaml \
-    --aug_cfg   config/augmentation/default.yaml \
-    --epochs 30 --batch_size 64 \
-    --output_dir checkpoints/
+training entry：
+
+```txt
+train.py
+```
+
+輸入：`--data_root`（default `data`），底下的三個路徑自動推導：
+
+```txt
+image_root = <data_root>/hagridv2_512
+ann_root   = <data_root>/annotations
+cache_root = <data_root>/processed
+```
+
+輸出：
+
+```txt
+checkpoints/gesture_model.pth
+```
+
+checkpoint format：
+
+```python
+{
+    "model_state_dict": ...,
+    "model_cfg": ...,
+    "label_map": ...,
+    "val_acc": ...,
+    "aug_cfg": ...
+}
+```
+
+正式訓練（全量資料）：
+
+```powershell
+python train.py --epochs 30 --batch_size 64 --num_workers 4
+```
+
+Mini subset 快速迭代（每 class 2000 張，8:1:1(train, val, test)切，所有 cache 放在 `data/mini_train/`）：
+
+```powershell
+python train.py --mini_train --epochs 10 --batch_size 64 --num_workers 4
+```
+
+自訂 data root：
+
+```powershell
+python train.py --data_root D:/datasets/hagrid --epochs 30
+```
+
+開啟 augmentation：
+
+```powershell
+python train.py --aug_cfg config/augmentation/default.yaml --epochs 30
+```
+
+`batch_size` 是 mini-batch size。  
+例如 `batch_size=64` 代表每次 forward / backward 使用 64 筆樣本更新一次參數。
+
+也可以獨立建立 mini subset 而不訓練：
+
+```powershell
+python build_mini_train.py
+python build_mini_train.py --data_root D:/datasets/hagrid --per_class 1000
 ```
 
 ---
 
-## Evaluation Scoring (120 pts total)
+## Compression Overview
 
-| Criteria | Points | Rule |
-|----------|--------|------|
-| Model Size | 30 pts | `(10 − size_MB) × 3`;**超過 10 MB 直接 0 分** |
-| Basic Performance (HaGRIDv2) | 20 pts | 按下表逐筆計分;`(RawScore / MaxRawScore) × 20` |
-| Real-World Robustness | 40 pts | 按下表逐筆計分;`(RawScore / MaxRawScore) × 40` |
-| Presentation | 30 pts | Live demo + 防禦機制說明 |
+Compression 有兩條路線：
 
-**逐情況計分(Basic Performance 與 Robustness 共用):**
+```txt
+src/compression/compress.py
+```
 
-| GT (ground truth) | Prediction | Score |
-|-------------------|------------|-------|
-| 5-class | correct class | **+1** |
-| 5-class | wrong class / NA | **−2** |
-| NA | any 5-class | **−2** |
-| NA | NA | **0** |
+已測通的 pruning-only fallback：
 
-**Rationale:** NA 若正確處理，視為「no reward / no penalty」(得 0 分);
-只有在誤觸成一個 false event(把 NA 判成某個 5-class)時才扣分。
+```txt
+.pth checkpoint
+→ global magnitude unstructured pruning
+→ fine-tune retraining
+→ compressed .pth
+→ compressed .onnx
+```
 
-**其他影響設計的 spec 細節:**
-- **false trigger 扣 2 倍** → 保守判 N/A 優於積極分類。
-- **target 只在 standard pose 下計分。** ambiguous、distorted、非標準姿態都必須
-  當成 **N/A**。
-- Basic Performance 測試集有 **TA 加的 augmentation**(bbox jitter、blur 等) ——
-  我們的 training augmentation 必須涵蓋這些。
-- Real-World Robustness 是 **TA 自拍**的集合:**50 張 N/A 干擾影像(日常動作)
-  + 50 張 target 影像**。
+```txt
+src/compression/baseline.py
+```
+
+完整 Han et al. Deep Compression baseline：
+
+```txt
+.pth checkpoint
+→ global magnitude unstructured pruning
+→ fine-tune retraining
+→ k-means weight sharing
+→ centroid fine-tuning
+→ Huffman coding
+→ .ptmodel archive
+```
+
+主要 reference：
+
+```txt
+Han et al.,
+Deep Compression: Compressing Deep Neural Networks with Pruning,
+Trained Quantization and Huffman Coding,
+ICLR 2016
+```
 
 ---
 
-## Baseline References
+## baseline.py Pipeline
 
-以下是合規的參考方法(都不依賴 HaGRID-pretrained weight):
+`baseline.py` 是完整 compression baseline。
 
-- **Image branch:** MobileNetV3 — A. Howard et al., *Searching for MobileNetV3*,
-  ICCV 2019. arXiv:1905.02244。ImageNet-pretrained backbone，spec 明文允許。
-- **Landmark branch / edge baseline:** F. Zhang et al., *MediaPipe Hands:
-  On-device Real-time Hand Tracking*, 2020. arXiv:2006.10214。21 點 landmark 的
-  來源;spec 允許。
-- **Dataset:** A. Nuzhdin et al., *HaGRIDv2: 1M Images for Static and Dynamic
-  Hand Gesture Recognition*, 2024. arXiv:2412.01508。
+完整流程：
 
-> 官方 HaGRIDv2 leaderboard 的 model 是 **HaGRID-pretrained，因此不可用** ——
-> 這裡不使用，只列出作為對照。
+```txt
+input .pth checkpoint
+
+→ load checkpoint
+→ build_model(model_cfg)
+→ load model_state_dict
+
+→ global magnitude pruning
+→ prune retrain
+→ save pruned .pth
+
+→ per-layer 1-D k-means weight sharing
+   Conv2d: 8-bit, 256 centroids
+   Linear: 5-bit, 32 centroids
+
+→ centroid fine-tuning
+   assignment index fixed
+   grouped gradient update only modifies centroid values
+   model.eval() to freeze BN / dropout behavior
+
+→ calibrate conf_threshold on val set
+   sweep threshold
+   maximize spec raw score
+
+→ Huffman coding
+   encode centroid index stream
+   encode sparse structure using bitmask or relindex
+   automatically choose smaller representation per layer
+
+→ save .ptmodel
+→ verify decode round-trip
+```
+
+Default input：
+
+```txt
+checkpoints/gesture_model.pth
+```
+
+Default outputs：
+
+```txt
+checkpoints/gesture_model_pruned50.pth
+checkpoints/gesture_model_pruned50_quant.pth
+model/gesture_model.ptmodel
+```
+
+---
+
+## .ptmodel Format
+
+`.ptmodel` 是 pickle-serialized Deep Compression archive，format key：
+
+```txt
+ptmodel-dc-v1
+```
+
+內容包含：
+
+```python
+{
+    "format": "ptmodel-dc-v1",
+    "model_cfg": {...},
+    "label_map": ["N/A", "fist", "like", "ok", "one", "palm"],
+    "compression": {
+        "method": "deep_compression",
+        "prune_amount": 0.5,
+        "conv_bits": 8,
+        "fc_bits": 5,
+        "global_sparsity": 0.5,
+        "best_conf_threshold": ...,
+        ...
+    },
+    "tensors": {
+        "<layer>.weight": {
+            "kind": "q",
+            "shape": [...],
+            "bits": 8 or 5,
+            "k": int,
+            "n_weights": int,
+            "centroids": np.float32 array,
+            "code_lengths": np.uint8 array,
+            "bitstream": bytes,
+            "nbits": int,
+            "sparse_enc": "bitmask" or "relindex",
+            ...
+        },
+        "<other tensor>": {
+            "kind": "raw",
+            "array": np.ndarray
+        }
+    }
+}
+```
+
+`.ptmodel` decoder 只依賴：
+
+```txt
+numpy
+torch
+Python stdlib
+```
+
+不需要：
+
+```txt
+scipy
+sklearn
+albumentations
+mediapipe
+onnxruntime
+```
+
+---
+
+## Compression Commands
+
+和 `train.py` 一樣，baseline 也只收 `--data_root`（default `data`），底下三個路徑自動推導：
+
+```txt
+image_root = <data_root>/hagridv2_512
+ann_root   = <data_root>/annotations
+cache_root = <data_root>/processed
+```
+
+mini subset 壓縮（加 `--mini_train`，ann/cache 切到 `<data_root>/mini_train` 下，image_root 不變）：
+
+```powershell
+python -m src.compression.baseline --pth_in checkpoints/mini/gesture_model.pth --mini_train --prune_epochs 1 --ft_epochs 1
+```
+
+正式資料（全量）：
+
+```powershell
+python -m src.compression.baseline --pth_in checkpoints/gesture_model.pth
+```
+
+自訂 data root：
+
+```powershell
+python -m src.compression.baseline --pth_in checkpoints/gesture_model.pth --data_root D:/datasets/hagrid
+```
+
+成功 log 應包含：
+
+```txt
+[baseline] post-prune global sparsity=0.5000
+[baseline] quantized Conv2d ...
+[baseline] quantized Linear ...
+[baseline] calibrated conf_threshold=...
+[baseline] saved .ptmodel -> model\gesture_model.ptmodel
+[baseline] decode round-trip OK
+```
+
+---
+
+## Evaluation
+
+evaluation entry：
+
+```txt
+src/evaluate.py
+```
+
+支援：
+
+```txt
+.pth
+.onnx
+.ptmodel
+```
+
+三種都透過 `GesturePredictor` 推論。
+
+跟其他 entry 一樣只收 `--data_root`（default `data`），cache 讀 `<data_root>/processed`；
+加 `--mini_train` 則讀 `<data_root>/mini_train/processed`。
+
+Evaluate original checkpoint：
+
+```powershell
+python -m src.evaluate --weights checkpoints/gesture_model.pth --split val --conf_threshold 0
+```
+
+Evaluate compressed `.ptmodel`：
+
+```powershell
+python -m src.evaluate --weights model/gesture_model.ptmodel --split val --conf_threshold 0
+```
+
+使用 `.ptmodel` 內校準 threshold：
+
+```powershell
+python -m src.evaluate --weights model/gesture_model.ptmodel --split val
+```
+
+Evaluate mini subset：
+
+```powershell
+python -m src.evaluate --weights model/gesture_model.ptmodel --mini_train --split val
+```
+
+輸出 metrics：
+
+```txt
+model_size_mb
+conf_threshold
+confusion matrix
+plain_accuracy
+target_accuracy
+na_false_trigger_rate
+RawScore
+MaxRawScore
+score_ratio
+Model Size score
+Basic Performance estimate
+Robustness estimate
+```
+
+---
+
+## Design Trade-offs
+
+### 為什麼使用 `.ptmodel`
+
+`.ptmodel` 是本專案自訂 Deep Compression archive。  
+它可以儲存：
+
+```txt
+sparse structure
+centroid table
+Huffman-coded centroid index stream
+raw non-compressed tensors
+compression metadata
+```
+
+這比普通 `.pth` 或 `.onnx` 更接近 Han et al. Deep Compression 的 storage representation。
+
+### 為什麼 inference 可以吃 `.ptmodel`
+
+`inference.py` 是我們自己提交的檔案。  
+只要它能在 fresh Colab runtime 中載入 `model/gesture_model.ptmodel` 並正確回傳 `predict()` 結果，spec 沒有限制 model file 副檔名。
+
+`.ptmodel` 第一次載入時會 decode 成 dense PyTorch state_dict，之後 cache model，不會每次 predict 都重新 decode。
+
+### 為什麼不用 ONNX 當 full compression output
+
+完整 Deep Compression 的 Huffman-coded artifact 本質上是 encoded storage，不是 standard ONNX graph。
+
+若硬要輸出 ONNX，通常要先 decode / dequantize 回 dense tensor。  
+這樣 ONNX 可以跑，但不代表 ONNX 本身保留了 Huffman-coded storage 優勢。
+
+---
+
+## Environment Setup
+
+建議 Python：
+
+```txt
+Python 3.10
+```
+
+建立 conda environment：
+
+```powershell
+conda create -n gesture-cls python=3.10 -y
+conda activate gesture-cls
+```
+
+安裝 inference dependencies：
+
+```powershell
+pip install -r requirements.txt
+```
+
+建議 `requirements.txt`：
+
+```txt
+numpy>=1.24
+torch>=2.2
+opencv-python-headless>=4.8,<5.0
+Pillow>=10.0
+```
+
+若 final model 使用 MobileNetV3-Small，還需要：
+
+```txt
+torchvision>=0.17
+```
+
+安裝 training / compression dependencies：
+
+```powershell
+pip install -r requirements-train.txt
+```
+
+`requirements-train.txt` 應包含：
+
+```txt
+-r requirements.txt
+
+mediapipe>=0.10.14,<0.11.0
+tqdm>=4.66
+scikit-learn>=1.4
+matplotlib>=3.8
+seaborn>=0.13
+albumentations>=1.4,<2.0
+```
+
+---
+
+## Scoring
+
+總分 120。
+
+| Criteria | Points | Rule |
+|---|---:|---|
+| Model Size | 30 | `(10 - size_MB) × 3`，超過 10 MB 得 0 |
+| Basic Performance | 20 | HaGRIDv2-based test set |
+| Real-World Robustness | 40 | TA-shot real-world set |
+| Presentation | 30 | live demo + defense mechanism explanation |
+
+逐筆 scoring：
+
+| GT | Prediction | Score |
+|---|---|---:|
+| target class | correct target class | +1 |
+| target class | wrong class / N/A | -2 |
+| N/A | any target class | -2 |
+| N/A | N/A | 0 |
+
+設計重點：
+
+```txt
+false trigger 很貴
+N/A handling 很重要
+plain accuracy 不夠
+confidence threshold 需要調
+landmark-based rejection 可以提升 robustness
+```
+
+---
+
+## References
+
+```txt
+Han et al.,
+Deep Compression: Compressing Deep Neural Networks with Pruning,
+Trained Quantization and Huffman Coding,
+ICLR 2016.
+```
+
+作為 compression baseline 參考。`baseline.py` 對應：
+
+```txt
+pruning
+trained quantization / weight sharing
+Huffman coding
+```
+
+```txt
+Howard et al.,
+Searching for MobileNetV3,
+ICCV 2019.
+```
+
+作為 image backbone 參考。
+
+```txt
+Zhang et al.,
+MediaPipe Hands: On-device Real-time Hand Tracking,
+2020.
+```
+
+作為 21-point landmark representation 參考。
+
+```txt
+Nuzhdin et al.,
+HaGRIDv2: 1M Images for Static and Dynamic Hand Gesture Recognition,
+2024.
+```
+
+作為 dataset 參考。
+
+HaGRID / HaGRIDv2 gesture recognition pretrained weights 不可用。
+
+允許：
+
+```txt
+ImageNet-pretrained backbone
+MediaPipe Hand Landmarker
+```
 
 ---
 
 ## Submission
 
-```bash
-zip -r team_X.zip inference.py model/ src/ requirements.txt README.md
+預期 zip：
+
+```txt
+team_X.zip
+├── inference.py
+├── model/
+│   └── gesture_model.ptmodel
+├── src/
+├── requirements.txt
+└── README.md
 ```
 
-- `inference.py` 必須放在 zip 的**最上層**。
-- 因為 `inference.py` 會 import `src/predictor.py`(以及所選的 `src/models/`
-  module)，這些檔案**也必須一起打包**。請確認 zip 在 **fresh Colab runtime
-  無需手動修改**即可解開並執行。
-- `hand_preprocess.py` 由 TA 提供 —— **不要打包**。
+Windows 建立 zip：
 
----
+```powershell
+Compress-Archive -Path inference.py,model,src,requirements.txt,README.md -DestinationPath team_X.zip
+```
 
-## Notes
+不要放：
 
-- 在 HaGRID / HaGRIDv2 上 pretrained 的 weight **不允許**。
-  ImageNet-pretrained backbone(例如 MobileNetV3-Small)**允許**，
-  **MediaPipe Hand Landmarker** 也允許。
-- N/A 的 engineering heuristic(confidence thresholding、landmark-based rule)
-  是 spec **明文鼓勵**的。
-- Full-frame raw image **嚴格禁止**當作 model input。
+```txt
+data/
+checkpoints/
+requirements-train.txt
+```
 
----
-
-## TODO
-
-Work is split three ways: **augmentation · model · compression**.
-
-### Spec alignment
-- [ ] Build N/A pool from the 21 one-handed non-target classes + `no_gesture`; exclude the 7 two-handed classes
-- [ ] Implement standard-pose-only handling for targets (ambiguous / distorted -> N/A)
-- [ ] Confirm augmentation covers TA's bbox-jitter / blur on the basic set
-- [ ] Sanity-check against the Robustness format (50 N/A daily actions + 50 targets)
-
-### Augmentation (`src/augmentation/`, `config/augmentation/`)
-- [ ] DataLoader: dynamic ±10% shift / scale / slight rotation on the crop
-- [ ] Random Gaussian Blur + Color Jitter (low-light / motion noise)
-- [ ] Optionally bbox jitter to mirror TA test-time augmentation
-
-### Model (`src/models/`, `config/models/`)
-- [ ] Backbone: MobileNetV3-Small / ShuffleNetV2 (multi-scale features)
-- [ ] Attention: CBAM or SE module
-- [ ] Loss: ArcFace / CosFace (widen angular margin between confusable classes)
-- [ ] (optional) SimCLR / MoCo self-supervised pre-training on HaGRIDv2
-- [ ] (optional) TSM / MoViNet light temporal modeling
-- [ ] Landmark branch: wrist-relative normalization -> MLP / geometric features
-
-### Compression (`src/compression/`, `config/compression/`)
-- [ ] Pruning + retrain (threshold per layer, zeroed grads stay zero)
-- [ ] K-means weight quantization + lookup table (shared centroids)
-- [ ] Huffman coding on pruned CSR weights + indices
-- [ ] Ref: Han et al., *Deep Compression*, ICLR 2016
-
-### Infrastructure
-- [ ] `src/predictor.py` shared core with `model_name` / `compression_name` selection + defaults
-- [ ] Per-part multiple variants wired through `config/<part>/*.yaml`
-- [ ] `inference.py` thin wrapper using default config; verify in fresh Colab
-- [ ] Confirm final `model/` weights <= 10 MB
-
-### Files still to review (currently empty)
-- [ ] inference.py · src/predictor.py · src/dataset.py · src/train.py · src/evaluate.py · requirements.txt
+`hand_preprocess.py` 由 TA 提供，除非最後規定改變，否則不需要放入 submission。
