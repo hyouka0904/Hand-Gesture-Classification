@@ -414,6 +414,73 @@ python build_mini_train.py --data_root D:/datasets/hagrid --per_class 1000
 
 ---
 
+## Data Augmentation
+
+Data augmentation 只會用在 training split。
+Validation、evaluation、compression calibration 和 inference 都不會使用隨機 augmentation，避免驗證流程和最終推論流程不一致。
+
+Augmentation 程式放在：
+
+```txt
+src/augmentation/
+```
+
+預設設定檔為：
+
+```txt
+config/augmentation/default.yaml
+```
+
+開啟 augmentation：
+
+```powershell
+python train.py --aug_cfg config/augmentation/default.yaml --epochs 30
+```
+
+關閉 augmentation：
+
+```powershell
+python train.py --aug_cfg none --epochs 30
+```
+
+Augmentation transform 的介面固定為：
+
+```python
+crop_aug, landmarks_aug = transform(crop, landmarks)
+```
+
+輸入與輸出格式：
+
+```txt
+crop      : RGB uint8 hand crop, shape (H, W, 3)
+landmarks : float32 crop-relative coordinates, shape (21, 2)
+```
+
+Augmentation module 不會做 final letterbox resize，也不會做 ImageNet normalization。這些固定 preprocessing 由 `predictor.crop_to_input()` 統一處理。
+
+目前 augmentation 包含：
+
+```txt
+Geometric augmentation:
+- random shift
+- random scale
+- small rotation
+- bbox jitter
+
+Photometric augmentation:
+- color jitter
+- brightness / contrast change
+- Gaussian blur
+- motion blur
+- noise
+- JPEG compression artifact simulation
+```
+
+Geometric transforms 會同時更新 image crop 和 21 個 landmarks。Photometric transforms 只會改變 RGB crop，不會改變 landmarks。
+
+當 augmentation 關閉時，training 可以使用 packed cache fast path。當 augmentation 開啟時，training 會使用 per-sample `.npz` cache，因為 geometric augmentation 需要在 fixed preprocessing 前處理原始 crop 和 landmarks。
+---
+
 ## Compression Overview
 
 Compression 有兩條路線：
