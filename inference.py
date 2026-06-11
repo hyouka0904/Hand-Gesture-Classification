@@ -16,9 +16,10 @@ _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE))  # make `src` importable regardless of cwd
 
 from src.predictor import GesturePredictor
-from src.models.test import build_model  # swap to the real model module at submission
 
 # Default submission weights: Deep Compression archive (must be <= 10 MB).
+# The model architecture (build_model) is auto-resolved from the model_module
+# recorded inside the .ptmodel at compress time — no hardcoded import needed.
 _WEIGHTS = _HERE / "model" / "gesture_model.ptmodel"
 
 _predictor: GesturePredictor | None = None
@@ -32,7 +33,7 @@ def _get_predictor() -> GesturePredictor:
             weights_path=_WEIGHTS,
             crop_size=112,
             conf_threshold=None,        # None -> use the threshold calibrated into the .ptmodel
-            model_builder=build_model,  # caller picks the model module (predictor stays generic)
+            # model_builder omitted -> auto-resolved from .ptmodel meta["model_module"]
         )
         print("[inference] model ready.", flush=True)
     return _predictor

@@ -570,6 +570,7 @@ def compress_from_pth(
     pth_in, pruned_pth_out, quant_pth_out, ptmodel_out,
     model_builder, train_loader, val_loader,
     amount, prune_epochs, prune_lr, conv_bits, fc_bits, ft_epochs, ft_lr, device,
+    model_module=None,
 ) -> nn.Module:
     device = resolve_device(device)
 
@@ -609,6 +610,7 @@ def compress_from_pth(
 
     meta = {
         "method": "deep_compression",
+        "model_module": model_module,  # so inference can auto-resolve build_model
         "prune_amount": amount, "conv_bits": conv_bits, "fc_bits": fc_bits,
         "global_sparsity": global_sparsity(model),
         **calib,  # includes best_conf_threshold + calib stats
@@ -696,6 +698,7 @@ def main() -> None:
         amount=args.amount, prune_epochs=args.prune_epochs, prune_lr=args.prune_lr,
         conv_bits=args.conv_bits, fc_bits=args.fc_bits,
         ft_epochs=args.ft_epochs, ft_lr=args.ft_lr, device=device,
+        model_module=args.model_module,
     )
 
 

@@ -257,6 +257,17 @@ def main():
     }
 
     train_loader, val_loader = build_loaders(args)
+
+    # Build test .npz cache (no packing needed — evaluate.py reads .npz directly).
+    # Done once here so evaluate.py always finds the cache without extra steps.
+    if not _has_npz_cache(args.cache_root, "test"):
+        print("[train] no .npz cache for split='test' — building via MediaPipe "
+              "(one-time, can be slow)...")
+        _build_cache(Path(args.ann_root), Path(args.image_root),
+                     Path(args.cache_root), "test")
+    else:
+        print("[train] test .npz cache already exists, skipping.")
+
     model = build_model(model_cfg).to(device)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)

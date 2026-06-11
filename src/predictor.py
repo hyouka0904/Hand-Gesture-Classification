@@ -124,20 +124,35 @@ class GesturePredictor:
             self._torch = torch
 
         elif self.backend == ".ptmodel":
+            import importlib
             import torch
-            if model_builder is None:
-                raise ValueError(
-                    ".ptmodel backend requires model_builder=fn(model_cfg)->nn.Module. "
-                    "Pass it explicitly (do not hardcode the model module)."
-                )
             # Lazy import: only a .ptmodel load pulls in the decoder.
             from src.compression.baseline import load_ptmodel
             model_cfg, state_dict, _label_map, meta = load_ptmodel(weights_path)
+            meta_threshold = meta.get("best_conf_threshold")
+
+            # Resolve the model architecture. Priority:
+            #   explicit model_builder arg > meta["model_module"] baked at compress time
+            if model_builder is None:
+                module_name = meta.get("model_module")
+                if not module_name:
+                    raise ValueError(
+                        ".ptmodel has no 'model_module' in its meta and no "
+                        "model_builder was passed. Re-compress with an updated "
+                        "baseline.py (which records model_module), or pass "
+                        "model_builder=fn(model_cfg)->nn.Module explicitly."
+                    )
+                module = importlib.import_module(module_name)
+                if not hasattr(module, "build_model"):
+                    raise AttributeError(
+                        f"{module_name} must define build_model(model_cfg)."
+                    )
+                model_builder = module.build_model
+
             model = model_builder(model_cfg)
             model.load_state_dict(state_dict)
             self._model = model.to(device).eval()
             self._torch = torch
-            meta_threshold = meta.get("best_conf_threshold")
 
         else:
             raise ValueError(f"Unsupported weights format: {weights_path.suffix}")

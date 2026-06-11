@@ -21,8 +21,6 @@ from pathlib import Path
 import numpy as np
 
 from src.predictor import GesturePredictor
-from src.models.model import build_model
-
 from tqdm import tqdm
 
 NUM_CLASSES = 6
@@ -78,26 +76,39 @@ def compute_metrics(confusion: np.ndarray, raw_score: int, max_raw: int) -> dict
     }
 
 
-def main() -> None:
-    args = parse_args()
+def run_evaluate(
+    weights_path: Path,
+    data_root: str = "data",
+    mini_train: bool = False,
+    split: str = "val",
+    crop_size: int = 112,
+    conf_threshold: float | None = None,
+    device: str = "cpu",
+) -> dict:
+    """Core evaluation logic. Returns metrics dict.
 
-    weights_path = Path(args.weights)
+    model_builder is intentionally omitted: GesturePredictor auto-resolves
+    build_model from meta['model_module'] baked into the .ptmodel at compress
+    time. For .pth weights the caller should pass a model_builder via a
+    GesturePredictor constructed outside — or simply use the .ptmodel path.
+    """
+    weights_path = Path(weights_path)
     model_size_mb = weights_path.stat().st_size / (1024 * 1024)
 
     predictor = GesturePredictor(
         weights_path=weights_path,
-        crop_size=args.crop_size,
-        conf_threshold=args.conf_threshold,
-        model_builder=build_model,
-        device=args.device,
+        crop_size=crop_size,
+        conf_threshold=conf_threshold,
+        device=device,
+        # model_builder omitted -> auto-resolved from .ptmodel meta
     )
 
-    if args.mini_train:
-        cache_root = Path(args.data_root) / "mini_train" / "processed"
+    if mini_train:
+        cache_root = Path(data_root) / "mini_train" / "processed"
     else:
-        cache_root = Path(args.data_root) / "processed"
+        cache_root = Path(data_root) / "processed"
 
-    split_cache = cache_root / args.split
+    split_cache = cache_root / split
     samples = sorted(split_cache.rglob("*.npz"))
 
     if not samples:
@@ -109,25 +120,20 @@ def main() -> None:
 
     for npz_path in tqdm(samples, desc="evaluating"):
         data = np.load(npz_path)
-
         crop = data["crop"]
         landmarks = data["landmarks"]
         gt = int(data["label"])
-
         pred = predictor.predict(crop, landmarks)
-
         confusion[gt, pred] += 1
         raw_score += case_score(gt, pred)
-
         if gt != 0:
             max_raw += 1
 
     metrics = compute_metrics(confusion, raw_score, max_raw)
-
     size_score = (10 - model_size_mb) * 3 if model_size_mb <= 10 else 0.0
 
     print(f"\nweights = {weights_path}")
-    print(f"split = {args.split}")
+    print(f"split = {split}")
     print(f"samples = {len(samples)}")
     print(f"model_size_mb = {model_size_mb:.4f}")
     print(f"conf_threshold = {predictor.conf_threshold:.4f}")
@@ -146,6 +152,20 @@ def main() -> None:
     print(f"Basic Performance  (x20)    = {metrics['score_ratio'] * 20:.2f}")
     print(f"Robustness         (x40)    = {metrics['score_ratio'] * 40:.2f}")
 
+    return metrics
+
+
+def main() -> None:
+    args = parse_args()
+    run_evaluate(
+        weights_path=Path(args.weights),
+        data_root=args.data_root,
+        mini_train=args.mini_train,
+        split=args.split,
+        crop_size=args.crop_size,
+        conf_threshold=args.conf_threshold,
+        device=args.device,
+    )
 
 if __name__ == "__main__":
     main()
