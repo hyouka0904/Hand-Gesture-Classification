@@ -1,7 +1,21 @@
 # Hand Gesture Classification on Edge Devices
 
-> CS3570 Multimedia Technology — Final Project  
-> Challenge from Microsoft | HaGRIDv2 · 2026
+> **Inference Interface**
+> ```python
+> from inference import predict
+> result = predict(cropped_img, landmarks)
+> # cropped_img : np.ndarray  (H, W, 3)  uint8  RGB
+> # landmarks   : np.ndarray  (21, 2)    float32
+> # returns     : int in {0, 1, 2, 3, 4, 5}
+> #               0=N/A  1=fist  2=like  3=ok  4=one  5=palm
+> ```
+>
+> **Install**
+> ```bash
+> pip install -r requirements.txt
+> ```
+>
+> **Model**  `model/gesture_model.ptmodel` — decoded on first `predict()` call, no internet required.
 
 ---
 
@@ -874,3 +888,9 @@ requirements-train.txt
 ```
 
 `hand_preprocess.py` 由 TA 提供，除非最後規定改變，否則不需要放入 submission。
+
+## todo
+- prune-retrain 進度條
+- 不同模型的encode, decoder(build_model)要對齊
+- model用參數傳path不要寫死
+- 輸出路徑不要寫死 最好是用<model_name>加後綴 不要都是gesture_model 很難分辨
