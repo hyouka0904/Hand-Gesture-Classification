@@ -21,7 +21,7 @@ from pathlib import Path
 import numpy as np
 
 from src.predictor import GesturePredictor
-from src.models.test import build_model
+from src.models.model import build_model
 
 from tqdm import tqdm
 

@@ -45,7 +45,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from src.dataset import HaGRIDv2Dataset, PackedHaGRIDDataset, _build_cache
-from src.models.test import build_model   # baseline model; swap for real one later
+from src.models.model import build_model   # baseline model; swap for real one later
 from src.tools.pack_cache import pack_split
 from src.compression.baseline import calibrate_threshold
 
@@ -75,6 +75,18 @@ def parse_args():
     p.add_argument("--batch_size", type=int, default=64)
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--crop_size", type=int, default=112)
+    p.add_argument(
+        "--img_dim",
+        type=int,
+        default=128,
+        help="影像分支輸出維度（對齊 model.py build_model 的 img_dim）。",
+    )
+    p.add_argument(
+        "--lm_dim",
+        type=int,
+        default=32,
+        help="關節點分支輸出維度（對齊 model.py build_model 的 lm_dim）。",
+    )
     p.add_argument("--num_workers", type=int, default=4)
     p.add_argument("--output_dir", default="checkpoints")
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
@@ -235,7 +247,14 @@ def main():
               f"ann_root={args.ann_root} cache_root={args.cache_root}")
 
     device = args.device
-    model_cfg = {"crop_size": args.crop_size}
+    # model_cfg 必須完整記錄所有會影響模型形狀的超參數。
+    # key 名稱要對齊 src/models/model.py 的 build_model（img_dim / lm_dim），
+    # 否則 baseline.py 重建模型時會 fallback 到預設值，load_state_dict 可能爆掉。
+    model_cfg = {
+        "crop_size": args.crop_size,
+        "img_dim": args.img_dim,
+        "lm_dim": args.lm_dim,
+    }
 
     train_loader, val_loader = build_loaders(args)
     model = build_model(model_cfg).to(device)
