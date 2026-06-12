@@ -220,6 +220,7 @@ def stage_train(args, pth_out: Path, device: str) -> None:
         "best_conf_threshold": best_tau,
         "model_state_dict": model.state_dict(),
         "model_cfg": model_cfg,
+        "model_module": args.model_module,
         "label_map": train_mod.LABEL_MAP,
         "val_acc": best_acc,
         "aug_cfg": None if str(args.aug_cfg).lower() in {"", "none", "null", "false"} else args.aug_cfg,

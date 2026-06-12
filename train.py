@@ -45,7 +45,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from src.dataset import HaGRIDv2Dataset, PackedHaGRIDDataset, _build_cache
-from src.models.model import build_model   # baseline model; swap for real one later
+import importlib
 from src.tools.pack_cache import pack_split
 from src.compression.baseline import calibrate_threshold
 
@@ -89,6 +89,11 @@ def parse_args():
     )
     p.add_argument("--num_workers", type=int, default=4)
     p.add_argument("--output_dir", default="checkpoints")
+    p.add_argument(
+        "--model_module",
+        default="src.models.model",
+        help="module under src/models/ defining build_model(model_cfg); baked into the .pth.",
+    )
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
 
     # Augmentation 設定檔。只會用在 train split，val/test 一律不做 augmentation。
@@ -268,6 +273,7 @@ def main():
     else:
         print("[train] test .npz cache already exists, skipping.")
 
+    build_model = importlib.import_module(args.model_module).build_model
     model = build_model(model_cfg).to(device)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
@@ -302,6 +308,7 @@ def main():
                     "best_conf_threshold": best_tau,
                     "model_state_dict": model.state_dict(),
                     "model_cfg": model_cfg,
+                    "model_module": args.model_module,
                     "label_map": LABEL_MAP,
                     "val_acc": val_acc,
                     "aug_cfg": None if str(args.aug_cfg).lower() in {"", "none", "null", "false"} else args.aug_cfg,
